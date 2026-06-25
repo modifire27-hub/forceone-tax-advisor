@@ -178,6 +178,46 @@ class SheetLogger:
             print(f"[경고] 구글 시트 조회 실패: {e}")
             return []
 
+    def delete_log(self, timestamp: str, question: str) -> bool:
+        """
+        개별 질의응답 기록 1건을 시트에서 삭제.
+
+        설계 의도 (2026-06-25 추가):
+        - 검색 기록 화면에서 회계사가 PIN을 입력해야만 삭제 가능하도록 UI 쪽에서
+          PIN 확인을 먼저 거침 (이 메서드 자체는 PIN을 검증하지 않음 — 호출하는
+          쪽(streamlit_ui.py)에서 PIN 확인 후에만 이 메서드를 부르는 책임을 짐).
+        - 행을 정확히 식별하기 위해 '일시'와 '질문' 두 값이 모두 일치하는 행을 찾음.
+          일시(타임스탬프)는 초 단위까지 기록되므로 거의 항상 고유하지만, 혹시
+          같은 초에 같은 질문이 중복 기록된 극단적인 경우까지 고려해 두 값을
+          모두 대조함. 일치하는 첫 번째 행만 삭제함(완전히 동일한 행이 여러 개
+          있어도 하나만 지워짐 — 이런 경우는 실질적으로 거의 없음).
+
+        Parameters
+        ----------
+        timestamp : str
+            삭제할 행의 '일시' 값 (시트에 기록된 그대로, 예: "2026-06-25 02:36:34")
+        question : str
+            삭제할 행의 '질문' 값 (timestamp와 함께 행을 정확히 식별하기 위함)
+
+        Returns
+        -------
+        bool
+            삭제 성공 여부 (해당 행을 못 찾은 경우도 False)
+        """
+        if not self.enabled:
+            return False
+
+        try:
+            all_values = self.sheet.get_all_values()  # 헤더 포함, 1행부터
+            for row_idx, row in enumerate(all_values[1:], start=2):  # 시트 행 번호는 1부터, 헤더 제외하고 2행부터
+                if len(row) >= 2 and row[0] == timestamp and row[1] == question:
+                    self.sheet.delete_rows(row_idx)
+                    return True
+            return False  # 일치하는 행을 못 찾음
+        except Exception as e:
+            print(f"[경고] 구글 시트 행 삭제 실패: {e}")
+            return False
+
     # ------------------------------------------------------------------
     # 종합문서 전용 기록/조회 (개별 질의응답과는 별도 탭에 저장)
     # ------------------------------------------------------------------
@@ -237,6 +277,39 @@ class SheetLogger:
         except Exception as e:
             print(f"[경고] 종합문서 시트 조회 실패: {e}")
             return []
+
+    def delete_summary(self, timestamp: str) -> bool:
+        """
+        종합 문서 기록 1건을 '종합문서' 탭에서 삭제.
+
+        개별 질의응답(delete_log)과 동일한 설계 원칙을 따름: PIN 확인은 호출하는
+        쪽(streamlit_ui.py)의 책임이며, 이 메서드는 삭제 동작만 수행함.
+        종합문서는 '일시'만으로도 충분히 고유하므로(같은 초에 두 번 생성하기 어려움)
+        일시 하나만으로 행을 식별함.
+
+        Parameters
+        ----------
+        timestamp : str
+            삭제할 행의 '일시' 값
+
+        Returns
+        -------
+        bool
+            삭제 성공 여부 (해당 행을 못 찾은 경우도 False)
+        """
+        if not self.enabled or self.summary_sheet is None:
+            return False
+
+        try:
+            all_values = self.summary_sheet.get_all_values()
+            for row_idx, row in enumerate(all_values[1:], start=2):
+                if len(row) >= 1 and row[0] == timestamp:
+                    self.summary_sheet.delete_rows(row_idx)
+                    return True
+            return False
+        except Exception as e:
+            print(f"[경고] 종합문서 시트 행 삭제 실패: {e}")
+            return False
 
 
 # ----------------------------------------------------------------------

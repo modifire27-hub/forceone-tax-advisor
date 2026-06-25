@@ -183,7 +183,7 @@ def show_log_dialog():
 
     dialog_key_base = f"dialog_{row.get('일시', '')}".replace(" ", "_").replace(":", "")
 
-    col1, col2 = st.columns([1, 1.4])
+    col1, col2, col3 = st.columns([1, 1.4, 1])
     with col1:
         if st.button("이 답변 저장", key=f"{dialog_key_base}_save"):
             do_save(
@@ -228,6 +228,44 @@ def show_log_dialog():
                         else:
                             st.error("PIN이 일치하지 않습니다.")
 
+    with col3:
+        # 검색 기록 삭제 — 되돌릴 수 없는 작업이므로 지식베이스 확정과 동일하게
+        # 회계사 확정 PIN을 입력해야만 실행되도록 보호함.
+        delete_confirm_key = f"{dialog_key_base}_show_delete_confirm"
+        if st.button("이 기록 삭제", key=f"{dialog_key_base}_delete_btn"):
+            st.session_state[delete_confirm_key] = True
+
+        if st.session_state.get(delete_confirm_key):
+            if not engine.has_pin_set():
+                st.warning("먼저 사이드바에서 확정 PIN을 설정해주세요.")
+            else:
+                with st.form(f"{dialog_key_base}_delete_form"):
+                    st.caption("삭제하면 구글 시트에서 이 행이 완전히 사라지며, 되돌릴 수 없습니다.")
+                    delete_pin_input = st.text_input(
+                        "회계사 확정 PIN", type="password", key=f"{dialog_key_base}_delete_pin_input"
+                    )
+                    if st.form_submit_button("삭제 실행"):
+                        if engine.verify_pin(delete_pin_input):
+                            if not (engine.sheet_logger and engine.sheet_logger.enabled):
+                                st.error("구글 시트 로깅이 비활성 상태라 삭제할 수 없습니다.")
+                            else:
+                                deleted = engine.sheet_logger.delete_log(
+                                    timestamp=row.get("일시", ""), question=question
+                                )
+                                if deleted:
+                                    st.success("기록이 삭제되었습니다.")
+                                    st.session_state[delete_confirm_key] = False
+                                    # 사이드바에 캐시된 목록도 갱신해야 화면에서 사라짐
+                                    st.session_state["_loaded_logs"] = [
+                                        r for r in st.session_state.get("_loaded_logs", [])
+                                        if not (r.get("일시") == row.get("일시") and r.get("질문") == question)
+                                    ]
+                                    st.rerun()
+                                else:
+                                    st.error("삭제에 실패했습니다. 해당 행을 찾지 못했거나 시트 접근에 문제가 있습니다.")
+                        else:
+                            st.error("PIN이 일치하지 않습니다.")
+
 
 @st.dialog("종합 문서 기록 상세보기", width="large")
 def show_summary_log_dialog():
@@ -251,13 +289,50 @@ def show_summary_log_dialog():
     st.divider()
 
     dialog_key_base = f"sdialog_{row.get('일시', '')}".replace(" ", "_").replace(":", "")
-    if st.button("이 종합 문서 다시 저장", key=f"{dialog_key_base}_save"):
-        do_save(
-            title="세무질의 종합 자문 문서",
-            question="",
-            answer=summary_text,
-            filename_hint=f"종합자문_{row.get('일시', '').replace('-', '').replace(':', '').replace(' ', '_')}",
-        )
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("이 종합 문서 다시 저장", key=f"{dialog_key_base}_save"):
+            do_save(
+                title="세무질의 종합 자문 문서",
+                question="",
+                answer=summary_text,
+                filename_hint=f"종합자문_{row.get('일시', '').replace('-', '').replace(':', '').replace(' ', '_')}",
+            )
+
+    with col2:
+        # 종합 문서 삭제 — 검색 기록 삭제와 동일하게 회계사 확정 PIN으로 보호함.
+        delete_confirm_key = f"{dialog_key_base}_show_delete_confirm"
+        if st.button("이 종합 문서 삭제", key=f"{dialog_key_base}_delete_btn"):
+            st.session_state[delete_confirm_key] = True
+
+        if st.session_state.get(delete_confirm_key):
+            if not engine.has_pin_set():
+                st.warning("먼저 사이드바에서 확정 PIN을 설정해주세요.")
+            else:
+                with st.form(f"{dialog_key_base}_delete_form"):
+                    st.caption("삭제하면 구글 시트에서 이 행이 완전히 사라지며, 되돌릴 수 없습니다.")
+                    delete_pin_input = st.text_input(
+                        "회계사 확정 PIN", type="password", key=f"{dialog_key_base}_delete_pin_input"
+                    )
+                    if st.form_submit_button("삭제 실행"):
+                        if engine.verify_pin(delete_pin_input):
+                            if not (engine.sheet_logger and engine.sheet_logger.enabled):
+                                st.error("구글 시트 로깅이 비활성 상태라 삭제할 수 없습니다.")
+                            else:
+                                deleted = engine.sheet_logger.delete_summary(timestamp=row.get("일시", ""))
+                                if deleted:
+                                    st.success("종합 문서 기록이 삭제되었습니다.")
+                                    st.session_state[delete_confirm_key] = False
+                                    st.session_state["_loaded_summaries"] = [
+                                        r for r in st.session_state.get("_loaded_summaries", [])
+                                        if r.get("일시") != row.get("일시")
+                                    ]
+                                    st.rerun()
+                                else:
+                                    st.error("삭제에 실패했습니다. 해당 행을 찾지 못했거나 시트 접근에 문제가 있습니다.")
+                        else:
+                            st.error("PIN이 일치하지 않습니다.")
 
 
 # ----------------------------------------------------------------------

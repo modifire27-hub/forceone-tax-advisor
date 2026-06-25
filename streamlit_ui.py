@@ -150,6 +150,7 @@ st.session_state.setdefault("backlog", [])
 
 st.session_state.setdefault("summary_doc", None)
 st.session_state.setdefault("summary_doc_turns_count", 0)
+st.session_state.setdefault("kb_confirm_target", None)
 
 
 def get_thread_label(turns):
@@ -160,38 +161,68 @@ def get_thread_label(turns):
     return first_q[:40] + ("..." if len(first_q) > 40 else "")
 
 
-def render_confirm_to_kb_widget(question: str, answer: str, key_prefix: str):
+def render_confirm_to_kb_button(question: str, answer: str, key_prefix: str):
     """
-    '지식베이스에 확정 저장' 버튼 + 자동 검증 + PIN 확인 + 저장까지의 전체 흐름을
-    그려주는 공통 위젯. 검색 기록 팝업, 현재 대화 카드 등 여러 위치에서 재사용.
+    '지식베이스에 확정 저장' 버튼만 그림. 누르면 실제 작업 화면은 이 버튼이 있는
+    좁은 위치(다이얼로그, 카드 등)가 아니라 메인 화면 하단의 전용 영역에서 펼쳐짐
+    (render_confirm_to_kb_workspace 참고).
 
-    설계 의도 (2026-06-25 추가):
-    - 기존에는 PIN만 입력하면 곧바로 답변 전체를 지식베이스에 저장했음. 이 경우
-      회계사가 매번 내용이 정확한지, 어느 파일에 넣을지 직접 판단해야 했고,
-      답변 중 일부만 틀렸을 때 "이 부분만 빼고 저장"하기도 어려웠음.
-    - 개선: 버튼을 누르면 먼저 AI가 웹검색으로 자체 재검증을 수행하고, 의심되는
-      부분과 추천 저장 파일을 보여줌. 회계사는 그 결과를 보고 (1) 저장할 내용을
-      직접 수정할 수 있는 텍스트칸에서 다듬은 뒤, (2) 추천된 파일을 그대로 쓰거나
-      바꾸고, (3) PIN을 입력해 최종 승인함.
-    - 검증 결과는 참고용일 뿐, 검증에서 "특이사항 없음"이 나와도 최종 판단(저장
-      여부, 내용 수정 여부)은 항상 회계사의 PIN 승인을 통해서만 이뤄짐.
+    설계 의도 (2026-06-25 추가 — 작업 공간 분리):
+    - 처음에는 이 흐름 전체(검증 결과 + 큰 텍스트 수정칸 + 파일선택 + PIN)를 버튼이
+      있는 그 자리(다이얼로그 안, 좁은 카드 안)에 그대로 펼쳤었음. 하지만 답변
+      내용이 길 때(200줄 가까이) 좁은 영역의 작은 텍스트칸으로는 수정하기 너무
+      불편하다는 피드백을 받음.
+    - 해결: 버튼은 그 자리에 작게 두고, 누르면 "이 질문/답변을 지금부터 확정 저장
+      작업 대상으로 지정"만 함. 실제 검증 결과 표시, 수정용 텍스트칸, 파일 선택,
+      PIN 입력은 메인 화면(다이얼로그 바깥) 맨 아래의 별도의 큰 섹션에서 진행됨.
+      그 섹션은 화면 전체 너비를 쓸 수 있어 긴 내용도 편하게 수정 가능함.
     """
-    show_key = f"{key_prefix}_show_confirm_flow"
-    verified_key = f"{key_prefix}_verification_result"
-
+    target_key = "kb_confirm_target"
     if st.button("지식베이스에 확정 저장", key=f"{key_prefix}_confirm_entry_btn"):
-        st.session_state[show_key] = True
+        st.session_state[target_key] = {
+            "question": question,
+            "answer": answer,
+            "key_prefix": key_prefix,
+        }
+        # 이전에 다른 항목을 검증/수정하던 상태가 남아있으면 깨끗하게 초기화
+        st.session_state[f"{key_prefix}_verification_result"] = None
+        st.session_state[f"{key_prefix}_edited_content"] = answer
+        st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 진행해주세요.")
 
-    if not st.session_state.get(show_key):
+
+def render_confirm_to_kb_workspace():
+    """
+    실제 검증 → 수정 → 저장 흐름이 펼쳐지는 전용 작업 공간.
+    render_confirm_to_kb_button으로 대상이 지정된 경우에만 화면에 나타나며,
+    메인 화면 맨 아래(화면 전체 너비)에 한 번만 그려짐.
+    """
+    target = st.session_state.get("kb_confirm_target")
+    if not target:
         return
+
+    question = target["question"]
+    answer = target["answer"]
+    key_prefix = target["key_prefix"]
+
+    st.divider()
+    st.header("지식베이스 확정 저장 작업 공간")
+    st.caption("아래에서 검증 결과를 확인하고, 필요한 부분을 직접 수정한 뒤 PIN으로 최종 승인하세요.")
+
+    with st.expander("대상 질문 / 원본 답변 보기", expanded=False):
+        st.markdown(f"**질문**: {question}")
+        st.markdown("**원본 답변**")
+        st.markdown(answer)
 
     if not engine.has_pin_set():
         st.warning("먼저 사이드바에서 확정 PIN을 설정해주세요.")
         return
 
-    # 1단계: 자동 검증 (아직 검증을 안 했다면 버튼으로 먼저 실행)
+    verified_key = f"{key_prefix}_verification_result"
+    edited_key = f"{key_prefix}_edited_content"
+
+    # 1단계: 자동 검증
     if st.session_state.get(verified_key) is None:
-        if st.button("① 내용 검증하기 (웹검색)", key=f"{key_prefix}_run_verify_btn"):
+        if st.button("① 내용 검증하기 (웹검색)", key=f"{key_prefix}_run_verify_btn", type="primary"):
             with st.spinner("답변 내용을 웹검색으로 재검증하는 중입니다..."):
                 st.session_state[verified_key] = engine.verify_before_confirm(question, answer)
             st.rerun()
@@ -200,24 +231,23 @@ def render_confirm_to_kb_widget(question: str, answer: str, key_prefix: str):
             return
 
     verification = st.session_state[verified_key]
-    st.markdown("**② 검증 결과 (참고용)**")
+    st.markdown("### ② 검증 결과 (참고용)")
     st.info(verification["verification_text"])
     st.caption(f"추천 저장 파일: {verification['recommended_file']} — {verification['recommended_reason']}")
 
-    # 2단계: 저장할 내용을 직접 수정할 수 있는 칸 (검증 결과를 보고 일부를 빼거나 고칠 수 있음)
-    edited_key = f"{key_prefix}_edited_content"
+    # 2단계: 저장할 내용을 직접 수정 (화면 전체 너비, 충분히 큰 높이)
     if edited_key not in st.session_state:
         st.session_state[edited_key] = answer
 
-    st.markdown("**③ 저장할 내용 확인/수정**")
+    st.markdown("### ③ 저장할 내용 확인/수정")
     st.session_state[edited_key] = st.text_area(
         "지식베이스에 저장될 최종 내용 (검증 결과를 참고하여 필요한 부분을 직접 수정하세요)",
         value=st.session_state[edited_key],
-        height=200,
+        height=500,
         key=f"{key_prefix}_edit_textarea",
     )
 
-    # 3단계: 저장 파일 선택 (추천값을 기본 선택값으로 사용)
+    # 3단계: 저장 파일 선택
     default_idx = (
         engine.KNOWLEDGE_FILE_OPTIONS.index(verification["recommended_file"])
         if verification["recommended_file"] in engine.KNOWLEDGE_FILE_OPTIONS
@@ -233,7 +263,13 @@ def render_confirm_to_kb_widget(question: str, answer: str, key_prefix: str):
     # 4단계: PIN 입력 후 최종 저장
     with st.form(f"{key_prefix}_final_confirm_form"):
         pin_input = st.text_input("⑤ 회계사 확정 PIN", type="password", key=f"{key_prefix}_final_pin_input")
-        if st.form_submit_button("확정 저장 실행"):
+        col_a, col_b = st.columns([1, 1])
+        with col_a:
+            submitted = st.form_submit_button("확정 저장 실행", type="primary", use_container_width=True)
+        with col_b:
+            cancelled = st.form_submit_button("취소", use_container_width=True)
+
+        if submitted:
             if engine.verify_pin(pin_input):
                 saved_path = engine.confirm_to_knowledge_base(
                     question=question,
@@ -241,11 +277,14 @@ def render_confirm_to_kb_widget(question: str, answer: str, key_prefix: str):
                     target_file=target_file,
                 )
                 st.success(f"지식베이스에 확정 저장되었습니다: {saved_path}")
-                # 다음에 새로 시작할 수 있도록 상태 정리
-                st.session_state[show_key] = False
+                st.session_state["kb_confirm_target"] = None
                 st.session_state[verified_key] = None
             else:
                 st.error("PIN이 일치하지 않습니다.")
+        if cancelled:
+            st.session_state["kb_confirm_target"] = None
+            st.session_state[verified_key] = None
+            st.rerun()
 
 
 @st.dialog("검색 기록 상세보기", width="large")
@@ -287,7 +326,7 @@ def show_log_dialog():
             )
 
     with col2:
-        render_confirm_to_kb_widget(question=question, answer=answer, key_prefix=dialog_key_base)
+        render_confirm_to_kb_button(question=question, answer=answer, key_prefix=dialog_key_base)
 
     with col3:
         # 검색 기록 삭제 — 되돌릴 수 없는 작업이므로 지식베이스 확정과 동일하게
@@ -455,7 +494,11 @@ with st.sidebar:
                         st.success("PIN이 변경되었습니다.")
                         st.rerun()
 
-    if st.button("지식 베이스 새로고침", help="_knowledge 폴더 파일을 수정한 뒤 누르면 즉시 반영됩니다"):
+    if st.button(
+        "지식 베이스 새로고침",
+        help="로컬 _knowledge 폴더 파일을 수정했거나, 다른 곳에서 확정 저장한 "
+        "구글시트 지식베이스 내용을 즉시 반영하고 싶을 때 누르세요.",
+    ):
         engine.load_knowledge_base(force_reload=True)
         st.success("지식 베이스를 다시 불러왔습니다.")
 
@@ -837,7 +880,7 @@ if st.session_state.current_thread:
                     st.session_state.current_thread.pop(real_idx)
                     st.rerun()
             with col3:
-                render_confirm_to_kb_widget(
+                render_confirm_to_kb_button(
                     question=qa["question"], answer=qa["answer"], key_prefix=f"cur_{qa_key}"
                 )
 
@@ -951,3 +994,11 @@ if st.session_state.backlog:
                 user_type=user_type,
             )
         st.rerun()
+
+
+# ----------------------------------------------------------------------
+# 지식베이스 확정 저장 작업 공간 (화면 맨 아래, 화면 전체 너비)
+# ----------------------------------------------------------------------
+# 어디서든(검색 기록, 현재 대화 카드 등) "지식베이스에 확정 저장" 버튼을 누르면
+# 여기에 작업 대상이 지정되고, 이 섹션에 검증/수정/저장 흐름이 펼쳐짐.
+render_confirm_to_kb_workspace()

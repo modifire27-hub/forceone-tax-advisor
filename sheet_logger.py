@@ -40,6 +40,19 @@ class SheetLogger:
     SUMMARY_SHEET_NAME = "종합문서"
     SUMMARY_HEADER = ["일시", "포함된질의건수", "종합문서요약", "종합문서전체", "사용자구분"]
 
+    # 지식베이스 탭(워크시트) 이름 및 헤더
+    # 설계 의도 (2026-06-25 추가):
+    # - 로컬 _knowledge 폴더의 .txt 파일은 PC에서 직접 수정 후 GitHub에 다시 올려야만
+    #   갱신되므로, 웹 서버에서 "지식베이스에 확정 저장"을 눌러도 그 효과가 서버
+    #   재시작 시 사라지는 문제가 있었음(서버는 GitHub의 임시 복제본일 뿐이라서).
+    # - 해결: 새로 확정되는 지식은 이 구글시트 "지식베이스" 탭에 쌓음. PC/웹 어디서
+    #   저장하든 같은 구글시트에 들어가므로 항상 최신 상태로 동기화됨.
+    # - 기존 .txt 파일들은 "최초 기본 지식"으로 그대로 두고, 양이 많아지면 이 탭의
+    #   내용을 다운로드해서 .txt로 정리한 뒤 GitHub에 다시 올리는 방식으로 주기적으로
+    #   "승격"시키는 운영 방식을 전제로 함.
+    KNOWLEDGE_SHEET_NAME = "지식베이스"
+    KNOWLEDGE_HEADER = ["일시", "분류", "질문", "확정내용"]
+
     def __init__(self, sheet_id: str = None, credentials_path: str = None, credentials_json: str = None):
         """
         Parameters
@@ -62,6 +75,7 @@ class SheetLogger:
         self.enabled = False
         self.sheet = None
         self.summary_sheet = None
+        self.knowledge_sheet = None
         self.error_message = ""
 
         sheet_id = (sheet_id or os.getenv("GOOGLE_SHEET_ID", "")).strip()
@@ -113,6 +127,18 @@ class SheetLogger:
             existing_summary_header = self.summary_sheet.row_values(1)
             if existing_summary_header != self.SUMMARY_HEADER:
                 self.summary_sheet.insert_row(self.SUMMARY_HEADER, 1)
+
+            # 지식베이스 탭 확인/생성 (없으면 새로 만듦)
+            try:
+                self.knowledge_sheet = spreadsheet.worksheet(self.KNOWLEDGE_SHEET_NAME)
+            except gspread.exceptions.WorksheetNotFound:
+                self.knowledge_sheet = spreadsheet.add_worksheet(
+                    title=self.KNOWLEDGE_SHEET_NAME, rows=500, cols=len(self.KNOWLEDGE_HEADER)
+                )
+
+            existing_knowledge_header = self.knowledge_sheet.row_values(1)
+            if existing_knowledge_header != self.KNOWLEDGE_HEADER:
+                self.knowledge_sheet.insert_row(self.KNOWLEDGE_HEADER, 1)
 
             self.enabled = True
             self.error_message = ""  # 성공했으므로 명시적으로 비움
@@ -310,6 +336,98 @@ class SheetLogger:
         except Exception as e:
             print(f"[경고] 종합문서 시트 행 삭제 실패: {e}")
             return False
+
+
+    # ------------------------------------------------------------------
+    # 지식베이스 (구글시트 기반) - 회계사 확정 저장한 새 지식을 누적 보관
+    # ------------------------------------------------------------------
+    def add_knowledge_entry(self, category: str, question: str, confirmed_content: str) -> bool:
+        """
+        회계사가 확정한 새 지식 1건을 '지식베이스' 탭에 한 행으로 추가.
+
+        주의: 이 메서드는 PIN 검증을 하지 않음 — 호출하는 쪽(streamlit_ui.py)에서
+        verify_pin()으로 확인한 뒤에만 호출해야 함.
+
+        Parameters
+        ----------
+        category : str
+            분류 (기존 .txt 파일명과 호환되는 분류명을 권장하되, 자유 텍스트도 가능.
+            예: "01_공통_세무질의회신집", "부가세", "법인세" 등)
+        question : str
+            원래 질문
+        confirmed_content : str
+            회계사가 검토/수정한 최종 확정 내용
+
+        Returns
+        -------
+        bool
+            성공 여부
+        """
+        if not self.enabled or self.knowledge_sheet is None:
+            return False
+
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.knowledge_sheet.append_row(
+                [timestamp, category, question, confirmed_content],
+                value_input_option="RAW",
+            )
+            return True
+        except Exception as e:
+            print(f"[경고] 지식베이스 시트 추가 실패: {e}")
+            return False
+
+    def get_all_knowledge_text(self) -> str:
+        """
+        '지식베이스' 탭에 쌓인 모든 항목을 하나의 텍스트로 합쳐서 반환.
+        AI 답변 생성 시 로컬 .txt 파일 내용과 합쳐서 참고 자료로 사용함.
+
+        Returns
+        -------
+        str
+            모든 항목을 정리한 텍스트. 항목이 없거나 실패 시 빈 문자열 반환
+            (빈 문자열이면 호출하는 쪽에서 이 부분을 그냥 건너뛰면 됨 — 안전한 기본값).
+        """
+        if not self.enabled or self.knowledge_sheet is None:
+            return ""
+
+        try:
+            rows = self.knowledge_sheet.get_all_records()
+        except Exception as e:
+            print(f"[경고] 지식베이스 시트 조회 실패: {e}")
+            return ""
+
+        if not rows:
+            return ""
+
+        chunks = []
+        for row in rows:
+            chunks.append(
+                f"[분류: {row.get('분류', '')}] (확정일시: {row.get('일시', '')})\n"
+                f"질의: {row.get('질문', '')}\n"
+                f"확정내용: {row.get('확정내용', '')}\n"
+                f"---"
+            )
+        return "\n\n".join(chunks)
+
+    def get_recent_knowledge_entries(self, limit: int = 50) -> list:
+        """
+        '지식베이스' 탭의 최근 항목을 가져옴 (조회/관리 UI에서 사용).
+
+        Returns
+        -------
+        list[dict]
+            실패 시 빈 리스트
+        """
+        if not self.enabled or self.knowledge_sheet is None:
+            return []
+
+        try:
+            all_rows = self.knowledge_sheet.get_all_records()
+            return all_rows[-limit:][::-1]  # 최신순
+        except Exception as e:
+            print(f"[경고] 지식베이스 시트 조회 실패: {e}")
+            return []
 
 
 # ----------------------------------------------------------------------

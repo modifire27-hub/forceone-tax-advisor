@@ -350,10 +350,21 @@ with st.sidebar:
         else:
             st.write("위 '기록 불러오기' 버튼을 눌러 구글 시트에서 기록을 가져오세요.")
     else:
-        st.info(
-            "구글 시트 로깅 미사용. `.env`에 GOOGLE_SHEET_ID, GOOGLE_CREDENTIALS_PATH를 "
-            "설정하면 모든 질의응답이 구글 스프레드시트에 자동 기록됩니다."
-        )
+        # enabled=False인 두 가지 경우를 구분해서 보여줌:
+        # (1) 아예 설정을 안 한 경우 (error_message가 비어있음) → 안내문만 표시
+        # (2) 설정을 시도했는데 실패한 경우 (error_message가 있음) → 실제 실패 원인을 그대로 보여줌
+        #     (이전에는 두 경우 모두 같은 안내문으로 뭉뚱그려져서, 실제로 무엇이 잘못됐는지
+        #     화면만 보고는 알 수 없었음. 진단을 쉽게 하기 위해 분리함.)
+        error_msg = engine.sheet_logger.error_message if engine.sheet_logger else ""
+        if error_msg:
+            st.error(f"구글 시트 로깅 설정을 시도했지만 실패했습니다.\n\n원인: {error_msg}")
+        else:
+            st.info(
+                "구글 시트 로깅 미사용.\n\n"
+                "- 로컬 환경: `.env`에 GOOGLE_SHEET_ID, GOOGLE_CREDENTIALS_PATH를 설정하세요.\n"
+                "- 웹 배포 환경: Streamlit Secrets에 GOOGLE_SHEET_ID, GOOGLE_CREDENTIALS_JSON을 설정하세요.\n\n"
+                "설정하면 모든 질의응답이 구글 스프레드시트에 자동 기록됩니다."
+            )
 
     st.divider()
     st.subheader("종합 문서 기록")

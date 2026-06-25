@@ -35,6 +35,11 @@ load_dotenv()
 from tax_advisor_engine import TaxAdvisorEngine
 from doc_export import build_export_bytes, safe_filename
 
+try:
+    from google.genai import types as genai_types
+except ImportError:
+    genai_types = None
+
 
 # ----------------------------------------------------------------------
 # 페이지 설정
@@ -654,6 +659,11 @@ def run_summary(turns):
     response = engine.client.models.generate_content(
         model=engine.model_name,
         contents=summary_prompt,
+        config=(
+            genai_types.GenerateContentConfig(temperature=0.2)
+            if genai_types is not None
+            else None
+        ),
     )
     return response.text
 

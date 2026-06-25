@@ -40,7 +40,25 @@ class SheetLogger:
     SUMMARY_SHEET_NAME = "종합문서"
     SUMMARY_HEADER = ["일시", "포함된질의건수", "종합문서요약", "종합문서전체", "사용자구분"]
 
-    def __init__(self, sheet_id: str = None, credentials_path: str = None):
+    def __init__(self, sheet_id: str = None, credentials_path: str = None, credentials_json: str = None):
+        """
+        Parameters
+        ----------
+        sheet_id : str
+            구글 스프레드시트 ID (없으면 .env/Secrets의 GOOGLE_SHEET_ID 사용)
+        credentials_path : str
+            서비스 계정 JSON 키 '파일 경로' (PC 로컬 환경에서 사용. 없으면
+            .env의 GOOGLE_CREDENTIALS_PATH 사용)
+        credentials_json : str
+            서비스 계정 JSON 키 '내용 전체(텍스트)'. 웹 배포 환경(Streamlit Cloud의
+            Secrets 등)에서는 PC의 파일 경로를 그대로 쓸 수 없으므로, JSON 파일 내용을
+            문자열 그대로 이 값으로 전달함 (없으면 .env/Secrets의 GOOGLE_CREDENTIALS_JSON 사용).
+
+        우선순위: credentials_json(텍스트)이 있으면 그걸 사용하고, 없으면
+        credentials_path(파일 경로)를 사용함. 즉 PC에서는 기존처럼 파일 경로만
+        설정해두면 그대로 동작하고, 웹 배포 환경에서는 GOOGLE_CREDENTIALS_JSON만
+        설정해두면 동작함. 두 환경을 같은 코드로 모두 지원하기 위함.
+        """
         self.enabled = False
         self.sheet = None
         self.summary_sheet = None
@@ -48,19 +66,34 @@ class SheetLogger:
 
         sheet_id = (sheet_id or os.getenv("GOOGLE_SHEET_ID", "")).strip()
         credentials_path = (credentials_path or os.getenv("GOOGLE_CREDENTIALS_PATH", "")).strip()
+        credentials_json = (credentials_json or os.getenv("GOOGLE_CREDENTIALS_JSON", "")).strip()
 
-        if not sheet_id or not credentials_path:
+        if not sheet_id or not (credentials_path or credentials_json):
             # 설정이 없으면 조용히 비활성 상태로 둠 (선택 기능)
-            return
-
-        if not Path(credentials_path).exists():
-            self.error_message = f"인증키 파일을 찾을 수 없습니다: {credentials_path}"
-            print(f"[경고] 구글 시트 로깅 비활성화: {self.error_message}")
+            self.error_message = "__NOT_CONFIGURED__"  # 진단용: "설정 자체가 없음"과 "설정했는데 실패"를 구분
             return
 
         try:
             import gspread
-            gc = gspread.service_account(filename=credentials_path)
+
+            if credentials_json:
+                # 웹 배포 환경: JSON 텍스트를 그대로 사용 (파일을 거치지 않음)
+                import json
+                try:
+                    credentials_dict = json.loads(credentials_json)
+                except json.JSONDecodeError as e:
+                    self.error_message = f"GOOGLE_CREDENTIALS_JSON 형식이 올바른 JSON이 아닙니다: {e}"
+                    print(f"[경고] 구글 시트 로깅 비활성화: {self.error_message}")
+                    return
+                gc = gspread.service_account_from_dict(credentials_dict)
+            else:
+                # PC 로컬 환경: 파일 경로 방식 (기존 방식 그대로 유지)
+                if not Path(credentials_path).exists():
+                    self.error_message = f"인증키 파일을 찾을 수 없습니다: {credentials_path}"
+                    print(f"[경고] 구글 시트 로깅 비활성화: {self.error_message}")
+                    return
+                gc = gspread.service_account(filename=credentials_path)
+
             spreadsheet = gc.open_by_key(sheet_id)
             self.sheet = spreadsheet.sheet1
 
@@ -82,12 +115,14 @@ class SheetLogger:
                 self.summary_sheet.insert_row(self.SUMMARY_HEADER, 1)
 
             self.enabled = True
-        except ImportError:
-            self.error_message = "gspread 패키지가 설치되어 있지 않습니다 (pip install gspread google-auth)"
+            self.error_message = ""  # 성공했으므로 명시적으로 비움
+        except ImportError as e:
+            self.error_message = f"[ImportError] gspread/google-auth 패키지 문제: {e}"
             print(f"[경고] 구글 시트 로깅 비활성화: {self.error_message}")
         except Exception as e:
-            self.error_message = str(e)
-            print(f"[경고] 구글 시트 로깅 초기화 실패: {e}")
+            # 진단용: 예외 타입명을 반드시 포함시켜서, error_message가 비어 보이는 일이 없게 함
+            self.error_message = f"[{type(e).__name__}] {e}"
+            print(f"[경고] 구글 시트 로깅 초기화 실패: {self.error_message}")
 
     def log(self, question: str, answer: str, evidence_type: str = "", user_type: str = "직원") -> bool:
         """

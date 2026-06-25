@@ -231,17 +231,27 @@ def render_confirm_to_kb_workspace():
             return
 
     verification = st.session_state[verified_key]
-    st.markdown("### ② 검증 결과 (참고용)")
-    st.info(verification["verification_text"])
+
+    st.markdown("### ② 검증 및 자동 수정 결과")
+    st.markdown(f"**수정 사항**: {verification['correction_summary']}")
+    with st.expander("검증 상세 내용 보기 (검색 근거 등)", expanded=False):
+        st.info(verification["verification_text"])
     st.caption(f"추천 저장 파일: {verification['recommended_file']} — {verification['recommended_reason']}")
 
-    # 2단계: 저장할 내용을 직접 수정 (화면 전체 너비, 충분히 큰 높이)
+    # 2단계: 저장할 내용 확인/수정
+    # 설계 의도 (2026-06-25 추가 — 검증 결과 자동 반영):
+    # 기본값을 원본(answer)이 아니라 AI가 검증 후 직접 고친 최종본
+    # (verification["corrected_content"])으로 설정함. 회계사가 매번 검증 결과를
+    # 읽고 원문에서 같은 부분을 직접 찾아 고치는 수고를 줄이기 위함. 다만 자동
+    # 수정이 100% 정확하다고 보장할 수 없으므로, 텍스트칸은 여전히 자유롭게
+    # 추가로 손볼 수 있게 열어둠.
     if edited_key not in st.session_state:
-        st.session_state[edited_key] = answer
+        st.session_state[edited_key] = verification["corrected_content"]
 
     st.markdown("### ③ 저장할 내용 확인/수정")
+    st.caption("위 '수정 사항'이 이미 아래 내용에 반영되어 있습니다. 한번 훑어보고 필요하면 추가로 고쳐주세요.")
     st.session_state[edited_key] = st.text_area(
-        "지식베이스에 저장될 최종 내용 (검증 결과를 참고하여 필요한 부분을 직접 수정하세요)",
+        "지식베이스에 저장될 최종 내용",
         value=st.session_state[edited_key],
         height=500,
         key=f"{key_prefix}_edit_textarea",

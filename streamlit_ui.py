@@ -33,7 +33,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from tax_advisor_engine import TaxAdvisorEngine
-from doc_export import export_response
+from doc_export import build_export_bytes, safe_filename
 
 
 # ----------------------------------------------------------------------
@@ -145,10 +145,6 @@ st.session_state.setdefault("backlog", [])
 
 st.session_state.setdefault("summary_doc", None)
 st.session_state.setdefault("summary_doc_turns_count", 0)
-st.session_state.setdefault(
-    "output_dir_value",
-    os.getenv("OUTPUT_DIR", "").strip() or str(Path(__file__).resolve().parent / "세법검토_아카이브"),
-)
 
 
 def get_thread_label(turns):
@@ -185,12 +181,16 @@ def show_log_dialog():
 
     col1, col2, col3 = st.columns([1, 1.4, 1])
     with col1:
+        save_show_key = f"{dialog_key_base}_save_show"
         if st.button("이 답변 저장", key=f"{dialog_key_base}_save"):
-            do_save(
+            st.session_state[save_show_key] = True
+        if st.session_state.get(save_show_key):
+            offer_downloads(
                 title="세무질의 자문 기록",
                 question=question,
                 answer=answer,
                 filename_hint=f"자문_{row.get('일시', '').replace('-', '').replace(':', '').replace(' ', '_')}",
+                key_prefix=dialog_key_base,
             )
 
     with col2:
@@ -292,12 +292,16 @@ def show_summary_log_dialog():
 
     col1, col2 = st.columns([1, 1])
     with col1:
+        save_show_key = f"{dialog_key_base}_save_show"
         if st.button("이 종합 문서 다시 저장", key=f"{dialog_key_base}_save"):
-            do_save(
+            st.session_state[save_show_key] = True
+        if st.session_state.get(save_show_key):
+            offer_downloads(
                 title="세무질의 종합 자문 문서",
                 question="",
                 answer=summary_text,
                 filename_hint=f"종합자문_{row.get('일시', '').replace('-', '').replace(':', '').replace(' ', '_')}",
+                key_prefix=dialog_key_base,
             )
 
     with col2:
@@ -545,11 +549,16 @@ with st.sidebar:
 
     st.divider()
     st.subheader("저장 옵션")
-    output_dir = st.text_input("저장 폴더", key="output_dir_value")
+    st.caption(
+        "결과는 파일로 만들어 다운로드 버튼으로 받습니다 "
+        "(서버에 저장되지 않으며, 받은 파일은 사용자 컴퓨터에만 남습니다)."
+    )
     save_formats = st.multiselect(
-        "저장 형식 (여러 개 선택 가능)",
+        "다운로드 형식 (여러 개 선택 가능)",
         options=["md", "docx", "pdf"],
         default=["md"],
+        help="pdf는 서버에 한글 폰트가 없으면 생성되지 않을 수 있습니다. "
+        "이 경우 md 또는 docx로 받아주세요.",
     )
     use_custom_filename = st.checkbox("파일명 직접 지정", value=False)
     custom_filename = ""
@@ -568,40 +577,55 @@ with st.sidebar:
 # ----------------------------------------------------------------------
 # 저장 헬퍼
 # ----------------------------------------------------------------------
-def do_save(title: str, question: str, answer: str, filename_hint: str = None, is_summary: bool = False, turns_count: int = None):
+def offer_downloads(title: str, question: str, answer: str, filename_hint: str = None, key_prefix: str = ""):
     """
-    결과를 로컬 파일(md/docx/pdf)로 저장.
+    결과를 md/docx/pdf 바이트로 만들어 다운로드 버튼들을 그려줌.
 
-    is_summary=True인 경우(= '종합 문서 저장' 버튼을 직접 눌렀을 때만), 구글 시트의
-    '종합문서' 탭에도 함께 기록함. 개별 질문 저장(is_summary=False)은 구글 시트에
-    별도로 남기지 않음 — 개별 질문은 답변 생성 시점에 이미 자동으로 기록되어 있으므로
-    저장 버튼을 누를 때 또 남기면 중복이 됨.
+    설계 의도 (2026-06-25 — 웹 배포 지원):
+    - 기존 do_save()는 서버의 로컬 폴더(output_dir)에 직접 파일을 써서 저장했음.
+      PC에서는 동작했지만, 웹 서버에는 그 경로가 없어서 폴더 생성 자체가
+      실패하고, 그 예외가 처리되지 않은 채 위로 던져지면서 화면 전체가
+      다시 그려져 "펼쳐둔 화면이 갑자기 초기화면처럼 닫혀버리는" 문제가 있었음.
+    - 해결: 디스크에 쓰지 않고 바이트만 만들어서, st.download_button으로
+      사용자 컴퓨터에 직접 내려주는 방식으로 전환함. 이러면 서버 경로 문제가
+      원천적으로 없어지고, 로컬 PC에서 쓰든 웹에서 쓰든 동일하게 동작함.
+    - 다운로드는 버튼을 누르는 사용자의 즉시 행동이므로, 별도의 "저장 폴더"
+      설정이 필요 없음. 어디에 받을지는 브라우저의 다운로드 동작(또는
+      다운로드 위치 선택 대화상자)에 맡김.
+
+    Parameters
+    ----------
+    key_prefix : str
+        같은 화면에 여러 개의 다운로드 버튼이 있을 때 Streamlit 위젯 키가
+        충돌하지 않도록 구분하는 접두사 (예: 호출 위치 + 타임스탬프 조합).
     """
-    filename = custom_filename.strip() if (use_custom_filename and custom_filename.strip()) else filename_hint
+    filename = safe_filename(
+        custom_filename.strip() if (use_custom_filename and custom_filename.strip()) else filename_hint
+    )
     formats = save_formats or ["md"]
 
-    result = export_response(
-        title=title,
-        question=question,
-        response_md=answer,
-        output_dir=output_dir,
-        filename=filename,
-        formats=formats,
-    )
+    built = build_export_bytes(title=title, question=question, response_md=answer, formats=formats)
 
-    saved_paths = [str(p) for fmt, p in result.items() if fmt != "errors" and p]
-    if saved_paths:
-        st.success("저장 완료:\n" + "\n".join(f"- {p}" for p in saved_paths))
-    if result["errors"]:
-        for err in result["errors"]:
-            st.warning(err)
+    ext_map = {"md": ("text/markdown", ".md"), "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx"), "pdf": ("application/pdf", ".pdf")}
+    cols = st.columns(len(formats)) if formats else []
+    for col, fmt in zip(cols, formats):
+        data = built.get(fmt)
+        with col:
+            if data:
+                mime, ext = ext_map[fmt]
+                st.download_button(
+                    label=f"{fmt.upper()} 다운로드",
+                    data=data,
+                    file_name=f"{filename}{ext}",
+                    mime=mime,
+                    key=f"{key_prefix}_dl_{fmt}",
+                )
+            else:
+                st.button(f"{fmt.upper()} 다운로드 (사용 불가)", disabled=True, key=f"{key_prefix}_dl_{fmt}_disabled")
 
-    if is_summary and engine.sheet_logger and engine.sheet_logger.enabled:
-        engine.sheet_logger.log_summary(
-            turns_count=turns_count if turns_count is not None else 0,
-            summary_text=answer,
-            user_type=user_type,
-        )
+    if built["errors"]:
+        for err in built["errors"]:
+            st.caption(f"⚠ {err}")
 
 
 def build_combined_text(turns):
@@ -674,6 +698,13 @@ if submitted:
     if not user_question.strip():
         st.warning("질문을 입력해주세요.")
     else:
+        # 설계 의도 (2026-06-25 추가):
+        # clear_on_submit=True라서 제출 즉시 입력칸이 비워지고 회색 예시 문구가
+        # 다시 보이게 됨. 그 상태에서 "AI가 답변을 생성 중입니다..." 스피너만 돌면,
+        # 방금 입력한 질문이 화면 어디에도 안 보여서 "내가 제대로 입력한 게
+        # 맞나?"하는 불안감을 줄 수 있음. 그래서 로딩 중에도 방금 입력했던 질문을
+        # 그대로 화면에 보여줘서, 무엇을 처리 중인지 명확하게 함.
+        st.info(f"질문을 처리 중입니다:\n\n**{user_question.strip()}**")
         with st.spinner("AI가 답변을 생성 중입니다 (3~5초 소요)..."):
             answer = engine.generate_guideline_with_retry(
                 user_question.strip(),
@@ -706,6 +737,17 @@ if st.session_state.current_thread:
 
     for idx, qa in enumerate(reversed(st.session_state.current_thread)):
         real_idx = len(st.session_state.current_thread) - 1 - idx
+        # 설계 의도 (2026-06-25 수정):
+        # 기존에는 real_idx(배열 위치)를 위젯 key로 썼는데, 이 값은 질문이
+        # 추가되거나 "기록에서 제거"로 삭제되면 다른 항목들의 real_idx가 통째로
+        # 바뀜. reversed()로 최신순 표시 중이라 화면 위치와 실제 인덱스가 계속
+        # 달라지면서, session_state에 저장된 "이 카드의 확정 폼이 열려있다" 같은
+        # 상태가 엉뚱한 카드로 옮겨붙는 문제가 있었음(꼬리질문을 2번 이상 하면
+        # 펼쳐둔 폼이 갑자기 닫히는 등의 증상으로 나타날 수 있음).
+        # 해결: time(타임스탬프, 초 단위)은 질문이 추가/삭제되어도 절대 바뀌지
+        # 않는 고유값이므로, 이를 키의 기준으로 사용함.
+        qa_key = qa["time"].replace("-", "").replace(":", "").replace(" ", "_")
+
         with st.container(border=True):
             st.markdown(f"<div class='qa-meta'>{qa['time']}</div>", unsafe_allow_html=True)
             st.markdown(f"<div class='qa-question'>Q. {qa['question']}</div>", unsafe_allow_html=True)
@@ -713,28 +755,32 @@ if st.session_state.current_thread:
 
             col1, col2, col3 = st.columns([1, 1, 1.4])
             with col1:
-                if st.button("이 답변 저장", key=f"save_cur_{real_idx}"):
-                    do_save(
+                save_show_key = f"save_show_{qa_key}"
+                if st.button("이 답변 저장", key=f"save_cur_{qa_key}"):
+                    st.session_state[save_show_key] = True
+                if st.session_state.get(save_show_key):
+                    offer_downloads(
                         title="세무질의 자문 기록",
                         question=qa["question"],
                         answer=qa["answer"],
-                        filename_hint=f"자문_{qa['time'].replace('-', '').replace(':', '').replace(' ', '_')}",
+                        filename_hint=f"자문_{qa_key}",
+                        key_prefix=qa_key,
                     )
             with col2:
-                if st.button("기록에서 제거", key=f"remove_cur_{real_idx}"):
+                if st.button("기록에서 제거", key=f"remove_cur_{qa_key}"):
                     st.session_state.current_thread.pop(real_idx)
                     st.rerun()
             with col3:
-                confirm_key = f"show_confirm_{real_idx}"
-                if st.button("지식베이스에 확정 저장", key=f"confirm_btn_{real_idx}"):
+                confirm_key = f"show_confirm_{qa_key}"
+                if st.button("지식베이스에 확정 저장", key=f"confirm_btn_{qa_key}"):
                     st.session_state[confirm_key] = True
 
                 if st.session_state.get(confirm_key):
                     if not engine.has_pin_set():
                         st.warning("먼저 사이드바에서 확정 PIN을 설정해주세요.")
                     else:
-                        with st.form(f"confirm_form_{real_idx}"):
-                            pin_input = st.text_input("회계사 확정 PIN", type="password", key=f"pin_input_{real_idx}")
+                        with st.form(f"confirm_form_{qa_key}"):
+                            pin_input = st.text_input("회계사 확정 PIN", type="password", key=f"pin_input_{qa_key}")
                             target_file = st.selectbox(
                                 "추가할 지식베이스 파일",
                                 options=[
@@ -743,7 +789,7 @@ if st.session_state.current_thread:
                                     "04_부가세_처리지침.txt",
                                     "05_기타_세법_예규.txt",
                                 ],
-                                key=f"target_file_{real_idx}",
+                                key=f"target_file_{qa_key}",
                             )
                             if st.form_submit_button("확정 저장 실행"):
                                 if engine.verify_pin(pin_input):
@@ -768,18 +814,30 @@ if st.session_state.current_thread:
         with st.spinner("지금까지의 대화를 종합하는 중입니다..."):
             st.session_state.summary_doc = run_summary(st.session_state.current_thread)
             st.session_state.summary_doc_turns_count = len(st.session_state.current_thread)
+        # 설계 의도 (2026-06-25 변경): 종합 문서는 '저장' 버튼을 누를 때가 아니라
+        # '생성'하는 시점에 자동으로 구글 시트(종합문서 탭)에 기록함. 개별 질문이
+        # 답변 생성 즉시 자동 기록되는 것과 동일한 방식으로 통일하기 위함.
+        # (이전에는 "종합 문서 저장" 버튼을 직접 눌렀을 때만 기록했었음)
+        if engine.sheet_logger and engine.sheet_logger.enabled:
+            engine.sheet_logger.log_summary(
+                turns_count=st.session_state.summary_doc_turns_count,
+                summary_text=st.session_state.summary_doc,
+                user_type=user_type,
+            )
 
     if st.session_state.summary_doc:
         st.markdown("### 종합 문서 결과")
         st.markdown(st.session_state.summary_doc)
+        save_show_key = "save_summary_cur_show"
         if st.button("종합 문서 저장", key="save_summary_cur"):
-            do_save(
+            st.session_state[save_show_key] = True
+        if st.session_state.get(save_show_key):
+            offer_downloads(
                 title="세무질의 종합 자문 문서",
                 question="",
                 answer=st.session_state.summary_doc,
                 filename_hint=f"종합자문_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                is_summary=True,
-                turns_count=st.session_state.summary_doc_turns_count,
+                key_prefix="save_summary_cur",
             )
 else:
     st.info("새 질문을 입력하면 여기서 대화가 시작됩니다.")
@@ -802,18 +860,36 @@ if st.session_state.backlog:
 
                 col1, col2 = st.columns([1, 1])
                 with col1:
+                    backlog_summary_key = f"backlog_summary_{b_idx}"
                     if st.button("이 묶음 종합 문서 생성", key=f"summary_backlog_{b_idx}"):
                         with st.spinner("종합하는 중입니다..."):
                             summary_text = run_summary(bundle["turns"])
-                        st.markdown(summary_text)
-                        do_save(
-                            title="세무질의 종합 자문 문서",
-                            question="",
-                            answer=summary_text,
-                            filename_hint=f"종합자문_{bundle['started_at'].replace('-', '').replace(':', '').replace(' ', '_')}",
-                            is_summary=True,
-                            turns_count=len(bundle["turns"]),
-                        )
+                        # 결과를 session_state에 저장해야 다음 리런(예: 다운로드
+                        # 버튼 클릭)에서도 화면에 계속 남아있음. 이전에는 지역
+                        # 변수에만 담아뒀어서, do_save() 안에서 예외가 나거나
+                        # 다른 위젯이 또 눌리면 이 결과 자체가 사라져 버렸음.
+                        st.session_state[backlog_summary_key] = summary_text
+                        # 종합 문서는 생성 시점에 자동으로 구글 시트(종합문서 탭)에 기록.
+                        if engine.sheet_logger and engine.sheet_logger.enabled:
+                            engine.sheet_logger.log_summary(
+                                turns_count=len(bundle["turns"]),
+                                summary_text=summary_text,
+                                user_type=user_type,
+                            )
+
+                    if st.session_state.get(backlog_summary_key):
+                        st.markdown(st.session_state[backlog_summary_key])
+                        save_show_key = f"{backlog_summary_key}_save_show"
+                        if st.button("이 종합 문서 저장", key=f"{backlog_summary_key}_save_btn"):
+                            st.session_state[save_show_key] = True
+                        if st.session_state.get(save_show_key):
+                            offer_downloads(
+                                title="세무질의 종합 자문 문서",
+                                question="",
+                                answer=st.session_state[backlog_summary_key],
+                                filename_hint=f"종합자문_{bundle['started_at'].replace('-', '').replace(':', '').replace(' ', '_')}",
+                                key_prefix=backlog_summary_key,
+                            )
                 with col2:
                     if st.button("이 묶음 삭제", key=f"delete_backlog_{b_idx}"):
                         st.session_state.backlog.pop(b_idx)
@@ -829,4 +905,11 @@ if st.session_state.backlog:
             all_turns.extend(st.session_state.current_thread)
             st.session_state.summary_doc = run_summary(all_turns)
             st.session_state.summary_doc_turns_count = len(all_turns)
+        # "현재 대화 종합"과 동일하게, 생성 시점에 자동으로 구글 시트에 기록.
+        if engine.sheet_logger and engine.sheet_logger.enabled:
+            engine.sheet_logger.log_summary(
+                turns_count=st.session_state.summary_doc_turns_count,
+                summary_text=st.session_state.summary_doc,
+                user_type=user_type,
+            )
         st.rerun()

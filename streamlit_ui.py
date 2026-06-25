@@ -161,7 +161,7 @@ def get_thread_label(turns):
     return first_q[:40] + ("..." if len(first_q) > 40 else "")
 
 
-def render_confirm_to_kb_button(question: str, answer: str, key_prefix: str):
+def render_confirm_to_kb_button(question: str, answer: str, key_prefix: str, dialog_row_key: str = None):
     """
     '지식베이스에 확정 저장' 버튼만 그림. 누르면 실제 작업 화면은 이 버튼이 있는
     좁은 위치(다이얼로그, 카드 등)가 아니라 메인 화면 하단의 전용 영역에서 펼쳐짐
@@ -176,6 +176,17 @@ def render_confirm_to_kb_button(question: str, answer: str, key_prefix: str):
       작업 대상으로 지정"만 함. 실제 검증 결과 표시, 수정용 텍스트칸, 파일 선택,
       PIN 입력은 메인 화면(다이얼로그 바깥) 맨 아래의 별도의 큰 섹션에서 진행됨.
       그 섹션은 화면 전체 너비를 쓸 수 있어 긴 내용도 편하게 수정 가능함.
+
+    버그 수정 (2026-06-25 추가 — 다이얼로그 안에서 호출 시):
+    - @st.dialog로 띄운 다이얼로그 안에서 이 버튼을 누르면, session_state만
+      바꾸는 것으로는 다이얼로그가 닫히지 않아 메인 화면 맨 아래의 작업 공간이
+      나타나지 않는 문제가 있었음(다이얼로그가 열려있는 동안 다이얼로그 바깥
+      영역이 갱신되지 않는 Streamlit의 동작 특성 때문). 또한 이 상태에서 작업을
+      계속 진행하면 화면이 초기화면으로 튕기는 현상도 발생했음.
+    - 해결: dialog_row_key(예: "_dialog_log_row")를 전달받으면, 그 값을 None으로
+      비워서 다음 리런부터 다이얼로그가 다시 열리지 않게 하고, st.rerun()으로
+      명시적으로 다이얼로그를 닫음. 이후 메인 화면이 정상적으로 다시 그려지면서
+      작업 공간이 나타남.
     """
     target_key = "kb_confirm_target"
     if st.button("지식베이스에 확정 저장", key=f"{key_prefix}_confirm_entry_btn"):
@@ -187,7 +198,13 @@ def render_confirm_to_kb_button(question: str, answer: str, key_prefix: str):
         # 이전에 다른 항목을 검증/수정하던 상태가 남아있으면 깨끗하게 초기화
         st.session_state[f"{key_prefix}_verification_result"] = None
         st.session_state[f"{key_prefix}_edited_content"] = answer
-        st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 진행해주세요.")
+
+        if dialog_row_key:
+            # 다이얼로그 안에서 호출된 경우: 다이얼로그를 닫고 메인 화면으로 이동
+            st.session_state[dialog_row_key] = None
+            st.rerun()
+        else:
+            st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 진행해주세요.")
 
 
 def render_confirm_to_kb_workspace():
@@ -336,7 +353,10 @@ def show_log_dialog():
             )
 
     with col2:
-        render_confirm_to_kb_button(question=question, answer=answer, key_prefix=dialog_key_base)
+        render_confirm_to_kb_button(
+            question=question, answer=answer, key_prefix=dialog_key_base,
+            dialog_row_key="_dialog_log_row",
+        )
 
     with col3:
         # 검색 기록 삭제 — 되돌릴 수 없는 작업이므로 지식베이스 확정과 동일하게

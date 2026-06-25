@@ -148,19 +148,27 @@ class TaxAdvisorEngine:
         env_path = env_path or (base_dir / ".env")
 
         # 1. .env 로드 및 API 키 확인
-        if not env_path.exists():
-            raise FileNotFoundError(
-                f"[오류] .env 파일을 찾을 수 없습니다: {env_path}\n"
-                f"       .env.example 파일을 복사하여 .env로 이름을 바꾸고 "
-                f"GEMINI_API_KEY 값을 입력하세요."
-            )
-        load_dotenv(env_path)
+        #
+        # 설계 의도 (2026-06-25 수정 — 웹 배포 지원):
+        # - PC 로컬 환경에서는 .env 파일에 GEMINI_API_KEY 등을 적어두고 사용함.
+        # - 웹 배포 환경(Streamlit Community Cloud 등)에서는 .env 파일 자체가
+        #   서버에 존재하지 않음. 대신 Streamlit Secrets(또는 다른 배포 플랫폼의
+        #   환경변수 기능)가 os.environ에 값을 직접 주입해줌.
+        # - 따라서 ".env 파일이 반드시 있어야 한다"고 강제하면 웹 배포 시 항상
+        #   실패함. .env가 있으면 읽어서 보충하고, 없으면 조용히 넘어가서
+        #   os.getenv()가 이미 주입된 환경변수(Secrets)를 그대로 사용하게 함.
+        # - 실제로 필요한 값(GEMINI_API_KEY)이 결국 비어있는지는 아래에서
+        #   별도로 확인하므로, .env 파일의 존재 여부 자체를 막을 필요는 없음.
+        if env_path.exists():
+            load_dotenv(env_path)
 
         api_key = os.getenv("GEMINI_API_KEY", "").strip()
         if not api_key or api_key.startswith("YOUR_") or api_key == "":
             raise ValueError(
-                "[오류] .env 파일에서 GEMINI_API_KEY를 찾을 수 없습니다.\n"
-                "       .env 파일을 열어 실제 API 키를 입력했는지 확인하세요."
+                "[오류] GEMINI_API_KEY를 찾을 수 없습니다.\n"
+                "       로컬 환경: .env 파일을 열어 실제 API 키를 입력했는지 확인하세요.\n"
+                "       웹 배포 환경: Streamlit Secrets(Advanced settings)에 "
+                "GEMINI_API_KEY를 설정했는지 확인하세요."
             )
 
         # 2. _knowledge 폴더 확인 (없으면 생성, 비어있으면 경고만)
@@ -192,7 +200,9 @@ class TaxAdvisorEngine:
         if _SHEET_LOGGER_AVAILABLE:
             self.sheet_logger = SheetLogger()
             if not self.sheet_logger.enabled and (
-                os.getenv("GOOGLE_SHEET_ID", "").strip() or os.getenv("GOOGLE_CREDENTIALS_PATH", "").strip()
+                os.getenv("GOOGLE_SHEET_ID", "").strip()
+                or os.getenv("GOOGLE_CREDENTIALS_PATH", "").strip()
+                or os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip()
             ):
                 # 설정을 시도했지만 실패한 경우에만 안내 (아예 설정 안 한 경우는 조용히 비활성)
                 print(f"[안내] 구글 시트 로깅이 비활성 상태입니다: {self.sheet_logger.error_message}")

@@ -718,6 +718,118 @@ Google 검색으로 찾아서, 찾은 내용만 정리해주세요.
         return stored_hash == input_hash
 
     # ------------------------------------------------------------------
+    # 지식베이스 확정 저장 전 자동 검증 - v1.6 추가
+    # ------------------------------------------------------------------
+    # 설계 의도 (2026-06-25 추가):
+    # - 회계사가 "지식베이스에 확정 저장"을 누르기 전에, AI 답변 내용을 다시 한번
+    #   웹검색으로 교차 검증하고, 어느 _knowledge 파일에 저장하면 좋을지도 자동으로
+    #   추천함. 회계사가 매번 "이거 맞나? 어느 파일에 넣지?"를 직접 판단하는 부담을
+    #   줄이고, AI가 1차로 점검한 결과를 보고 최종 승인만 내리도록 함.
+    # - 검증은 100% 확신을 주는 게 아니라 "의심되는 부분이 있는지"를 알려주는
+    #   참고용임을 명확히 해야 함. 검증 결과가 "문제없음"이라고 나와도 회계사의
+    #   최종 판단(PIN 승인)은 여전히 필요함.
+    KNOWLEDGE_FILE_OPTIONS = [
+        "01_공통_세무질의회신집.txt",
+        "02_업종별_기장유의사항.txt",
+        "04_부가세_처리지침.txt",
+        "05_기타_세법_예규.txt",
+    ]
+
+    def verify_before_confirm(self, question: str, content: str) -> dict:
+        """
+        지식베이스 확정 저장 전, 답변 내용을 웹검색으로 재검증하고
+        저장할 파일을 추천함.
+
+        Parameters
+        ----------
+        question : str
+            원래 질문
+        content : str
+            확정 저장하려는 답변 내용 (AI 답변 전체 또는 회계사가 수정한 버전)
+
+        Returns
+        -------
+        dict
+            {
+                "verification_text": str,  # 검증 결과 설명 (의심 포인트, 근거 등)
+                "recommended_file": str,   # 추천 저장 파일명
+                "recommended_reason": str, # 추천 이유 (한 줄)
+            }
+            웹검색 호출 자체가 실패하면 verification_text에 실패 사유가 담기고,
+            recommended_file은 기본값("01_공통_세무질의회신집.txt")으로 안전하게 반환됨
+            (검증 실패가 저장 자체를 막지는 않음 — 최종 판단은 항상 회계사의 PIN 승인).
+        """
+        options_text = ", ".join(self.KNOWLEDGE_FILE_OPTIONS)
+        verify_prompt = f"""다음은 세무 자문 AI가 생성한 답변입니다. 이 답변을 그대로 회계법인의
+내부 지식베이스(향후 다른 질문에도 참고 자료로 쓰일 데이터)에 확정 저장하기 전에,
+Google 검색으로 이 답변의 핵심 주장들이 실제 법령/실무와 맞는지 다시 한번 점검해주세요.
+
+[원래 질문]
+{question}
+
+[검증할 답변 내용]
+{content}
+
+[점검 방법]
+1. 답변에 나온 법령 조항 번호, 구체적인 수치(비율, 한도, 기간 등), 핵심 결론을
+   Google 검색으로 하나씩 확인하세요.
+2. 검색으로 확인한 결과와 답변 내용이 다른 부분이 있다면, 구체적으로 어디가
+   어떻게 다른지 짚어주세요 (예: "법인세법 시행령 제43조 제3항이라고 했으나,
+   검색 결과 해당 내용은 제4항에 해당함").
+3. 검색으로 확인했을 때 답변 내용과 일치하거나, 검색으로 반박할 근거를 찾지
+   못한 부분은 "확인된 바 특이사항 없음"으로 짚어주세요.
+4. 추측하지 말고, 실제로 검색해서 확인한 내용만 근거로 판단하세요.
+5. 답변 형식: 먼저 "[의심되는 부분]"이라는 제목으로 문제가 있을 수 있는 부분을
+   나열하고(없으면 "없음"), 그 다음 "[참고 출처]"라는 제목으로 검색에 사용한
+   출처를 간단히 나열하세요.
+6. 이 답변을 다음 파일들 중 어디에 저장하는 게 가장 적합한지도 판단해 마지막에
+   "[추천 파일]: 파일명" 형식으로 한 줄 적어주세요. 선택 가능한 파일:
+   {options_text}
+   (01_공통_세무질의회신집.txt: 특정 업종에 국한되지 않는 일반 세무 질의/회신
+    02_업종별_기장유의사항.txt: 약국 등 특정 업종에 특화된 기장 유의사항
+    04_부가세_처리지침.txt: 부가가치세 관련 처리 기준
+    05_기타_세법_예규.txt: 법인세/소득세 등 그 외 세법 예규 및 개정사항)
+   추천 이유도 "[추천 이유]: ..." 형식으로 한 줄 적어주세요.
+"""
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=verify_prompt,
+                config=genai_types.GenerateContentConfig(
+                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                    temperature=0.2,
+                ),
+            )
+            verification_text = response.text if response.candidates else ""
+        except Exception as e:
+            verification_text = f"[검증 실패] 웹검색 기반 재검증 호출에 실패했습니다: {e}"
+
+        if not verification_text:
+            verification_text = "[검증 실패] 검증 결과를 받지 못했습니다. 회계사가 직접 내용을 확인해주세요."
+
+        # [추천 파일]: ... 줄을 파싱해서 추출 (못 찾으면 안전한 기본값 사용)
+        recommended_file = self.KNOWLEDGE_FILE_OPTIONS[0]
+        recommended_reason = "추천 사유를 확인하지 못했습니다 — 기본값으로 지정되었습니다."
+        for line in verification_text.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("[추천 파일]"):
+                candidate = stripped.split(":", 1)[-1].strip()
+                # 모델이 자유 형식으로 적을 수 있으므로, 알려진 파일명 중 하나가
+                # 포함되어 있는지 확인해서 안전하게 매칭
+                for opt in self.KNOWLEDGE_FILE_OPTIONS:
+                    if opt in candidate or opt.replace(".txt", "") in candidate:
+                        recommended_file = opt
+                        break
+            elif stripped.startswith("[추천 이유]"):
+                recommended_reason = stripped.split(":", 1)[-1].strip()
+
+        return {
+            "verification_text": verification_text,
+            "recommended_file": recommended_file,
+            "recommended_reason": recommended_reason,
+        }
+
+    # ------------------------------------------------------------------
     # 지식베이스 확정 저장 - v1.5 추가
     # ------------------------------------------------------------------
     def confirm_to_knowledge_base(

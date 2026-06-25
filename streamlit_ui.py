@@ -160,6 +160,94 @@ def get_thread_label(turns):
     return first_q[:40] + ("..." if len(first_q) > 40 else "")
 
 
+def render_confirm_to_kb_widget(question: str, answer: str, key_prefix: str):
+    """
+    '지식베이스에 확정 저장' 버튼 + 자동 검증 + PIN 확인 + 저장까지의 전체 흐름을
+    그려주는 공통 위젯. 검색 기록 팝업, 현재 대화 카드 등 여러 위치에서 재사용.
+
+    설계 의도 (2026-06-25 추가):
+    - 기존에는 PIN만 입력하면 곧바로 답변 전체를 지식베이스에 저장했음. 이 경우
+      회계사가 매번 내용이 정확한지, 어느 파일에 넣을지 직접 판단해야 했고,
+      답변 중 일부만 틀렸을 때 "이 부분만 빼고 저장"하기도 어려웠음.
+    - 개선: 버튼을 누르면 먼저 AI가 웹검색으로 자체 재검증을 수행하고, 의심되는
+      부분과 추천 저장 파일을 보여줌. 회계사는 그 결과를 보고 (1) 저장할 내용을
+      직접 수정할 수 있는 텍스트칸에서 다듬은 뒤, (2) 추천된 파일을 그대로 쓰거나
+      바꾸고, (3) PIN을 입력해 최종 승인함.
+    - 검증 결과는 참고용일 뿐, 검증에서 "특이사항 없음"이 나와도 최종 판단(저장
+      여부, 내용 수정 여부)은 항상 회계사의 PIN 승인을 통해서만 이뤄짐.
+    """
+    show_key = f"{key_prefix}_show_confirm_flow"
+    verified_key = f"{key_prefix}_verification_result"
+
+    if st.button("지식베이스에 확정 저장", key=f"{key_prefix}_confirm_entry_btn"):
+        st.session_state[show_key] = True
+
+    if not st.session_state.get(show_key):
+        return
+
+    if not engine.has_pin_set():
+        st.warning("먼저 사이드바에서 확정 PIN을 설정해주세요.")
+        return
+
+    # 1단계: 자동 검증 (아직 검증을 안 했다면 버튼으로 먼저 실행)
+    if st.session_state.get(verified_key) is None:
+        if st.button("① 내용 검증하기 (웹검색)", key=f"{key_prefix}_run_verify_btn"):
+            with st.spinner("답변 내용을 웹검색으로 재검증하는 중입니다..."):
+                st.session_state[verified_key] = engine.verify_before_confirm(question, answer)
+            st.rerun()
+        else:
+            st.caption("저장 전에 먼저 내용을 검증해주세요. (검증 결과는 참고용이며, 최종 판단은 회계사가 직접 합니다.)")
+            return
+
+    verification = st.session_state[verified_key]
+    st.markdown("**② 검증 결과 (참고용)**")
+    st.info(verification["verification_text"])
+    st.caption(f"추천 저장 파일: {verification['recommended_file']} — {verification['recommended_reason']}")
+
+    # 2단계: 저장할 내용을 직접 수정할 수 있는 칸 (검증 결과를 보고 일부를 빼거나 고칠 수 있음)
+    edited_key = f"{key_prefix}_edited_content"
+    if edited_key not in st.session_state:
+        st.session_state[edited_key] = answer
+
+    st.markdown("**③ 저장할 내용 확인/수정**")
+    st.session_state[edited_key] = st.text_area(
+        "지식베이스에 저장될 최종 내용 (검증 결과를 참고하여 필요한 부분을 직접 수정하세요)",
+        value=st.session_state[edited_key],
+        height=200,
+        key=f"{key_prefix}_edit_textarea",
+    )
+
+    # 3단계: 저장 파일 선택 (추천값을 기본 선택값으로 사용)
+    default_idx = (
+        engine.KNOWLEDGE_FILE_OPTIONS.index(verification["recommended_file"])
+        if verification["recommended_file"] in engine.KNOWLEDGE_FILE_OPTIONS
+        else 0
+    )
+    target_file = st.selectbox(
+        "④ 저장할 지식베이스 파일",
+        options=engine.KNOWLEDGE_FILE_OPTIONS,
+        index=default_idx,
+        key=f"{key_prefix}_target_file_select",
+    )
+
+    # 4단계: PIN 입력 후 최종 저장
+    with st.form(f"{key_prefix}_final_confirm_form"):
+        pin_input = st.text_input("⑤ 회계사 확정 PIN", type="password", key=f"{key_prefix}_final_pin_input")
+        if st.form_submit_button("확정 저장 실행"):
+            if engine.verify_pin(pin_input):
+                saved_path = engine.confirm_to_knowledge_base(
+                    question=question,
+                    confirmed_content=st.session_state[edited_key],
+                    target_file=target_file,
+                )
+                st.success(f"지식베이스에 확정 저장되었습니다: {saved_path}")
+                # 다음에 새로 시작할 수 있도록 상태 정리
+                st.session_state[show_key] = False
+                st.session_state[verified_key] = None
+            else:
+                st.error("PIN이 일치하지 않습니다.")
+
+
 @st.dialog("검색 기록 상세보기", width="large")
 def show_log_dialog():
     """
@@ -199,39 +287,7 @@ def show_log_dialog():
             )
 
     with col2:
-        confirm_key = f"{dialog_key_base}_show_confirm"
-        if st.button("지식베이스에 확정 저장", key=f"{dialog_key_base}_confirm_btn"):
-            st.session_state[confirm_key] = True
-
-        if st.session_state.get(confirm_key):
-            if not engine.has_pin_set():
-                st.warning("먼저 사이드바에서 확정 PIN을 설정해주세요.")
-            else:
-                with st.form(f"{dialog_key_base}_confirm_form"):
-                    pin_input = st.text_input(
-                        "회계사 확정 PIN", type="password", key=f"{dialog_key_base}_pin_input"
-                    )
-                    target_file = st.selectbox(
-                        "추가할 지식베이스 파일",
-                        options=[
-                            "01_공통_세무질의회신집.txt",
-                            "02_업종별_기장유의사항.txt",
-                            "04_부가세_처리지침.txt",
-                            "05_기타_세법_예규.txt",
-                        ],
-                        key=f"{dialog_key_base}_target_file",
-                    )
-                    if st.form_submit_button("확정 저장 실행"):
-                        if engine.verify_pin(pin_input):
-                            saved_path = engine.confirm_to_knowledge_base(
-                                question=question,
-                                confirmed_content=answer,
-                                target_file=target_file,
-                            )
-                            st.success(f"지식베이스에 확정 저장되었습니다: {saved_path}")
-                            st.session_state[confirm_key] = False
-                        else:
-                            st.error("PIN이 일치하지 않습니다.")
+        render_confirm_to_kb_widget(question=question, answer=answer, key_prefix=dialog_key_base)
 
     with col3:
         # 검색 기록 삭제 — 되돌릴 수 없는 작업이므로 지식베이스 확정과 동일하게
@@ -781,37 +837,9 @@ if st.session_state.current_thread:
                     st.session_state.current_thread.pop(real_idx)
                     st.rerun()
             with col3:
-                confirm_key = f"show_confirm_{qa_key}"
-                if st.button("지식베이스에 확정 저장", key=f"confirm_btn_{qa_key}"):
-                    st.session_state[confirm_key] = True
-
-                if st.session_state.get(confirm_key):
-                    if not engine.has_pin_set():
-                        st.warning("먼저 사이드바에서 확정 PIN을 설정해주세요.")
-                    else:
-                        with st.form(f"confirm_form_{qa_key}"):
-                            pin_input = st.text_input("회계사 확정 PIN", type="password", key=f"pin_input_{qa_key}")
-                            target_file = st.selectbox(
-                                "추가할 지식베이스 파일",
-                                options=[
-                                    "01_공통_세무질의회신집.txt",
-                                    "02_업종별_기장유의사항.txt",
-                                    "04_부가세_처리지침.txt",
-                                    "05_기타_세법_예규.txt",
-                                ],
-                                key=f"target_file_{qa_key}",
-                            )
-                            if st.form_submit_button("확정 저장 실행"):
-                                if engine.verify_pin(pin_input):
-                                    saved_path = engine.confirm_to_knowledge_base(
-                                        question=qa["question"],
-                                        confirmed_content=qa["answer"],
-                                        target_file=target_file,
-                                    )
-                                    st.success(f"지식베이스에 확정 저장되었습니다: {saved_path}")
-                                    st.session_state[confirm_key] = False
-                                else:
-                                    st.error("PIN이 일치하지 않습니다.")
+                render_confirm_to_kb_widget(
+                    question=qa["question"], answer=qa["answer"], key_prefix=f"cur_{qa_key}"
+                )
 
     # ------------------------------------------------------------------
     # 전체 종합 (현재 묶음)

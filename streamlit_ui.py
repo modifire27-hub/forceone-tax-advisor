@@ -401,7 +401,20 @@ with st.sidebar:
 
     st.divider()
     with st.expander("진단 정보 (문제 발생 시 확인용)", expanded=False):
+        # 구글 시트 관련 환경변수 진단
+        # 주의: 실제 키 값은 절대 화면에 표시하지 않음. 존재 여부와 길이만 표시해서
+        # "os.getenv()가 값을 제대로 읽고 있는지"만 확인할 수 있게 함.
+        _gsheet_id = os.getenv("GOOGLE_SHEET_ID", "")
+        _gcred_json = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
+        _gcred_path = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
         st.code(
+            f"[구글 시트 관련]\n"
+            f"GOOGLE_SHEET_ID 읽힘: {'예 (' + str(len(_gsheet_id)) + '자)' if _gsheet_id else '아니오 (빈 값)'}\n"
+            f"GOOGLE_CREDENTIALS_JSON 읽힘: {'예 (' + str(len(_gcred_json)) + '자)' if _gcred_json else '아니오 (빈 값)'}\n"
+            f"GOOGLE_CREDENTIALS_PATH 읽힘: {'예 (' + str(len(_gcred_path)) + '자)' if _gcred_path else '아니오 (빈 값)'}\n"
+            f"sheet_logger.enabled: {engine.sheet_logger.enabled if engine.sheet_logger else '(sheet_logger 없음)'}\n"
+            f"sheet_logger.error_message: {engine.sheet_logger.error_message if engine.sheet_logger else '(sheet_logger 없음)'!r}\n"
+            f"\n[법제처 관련]\n"
             f"ENABLE_NTS_SEARCH 원본값: {os.getenv('ENABLE_NTS_SEARCH', '(없음)')!r}\n"
             f"LAW_API_OC 설정 여부: {'설정됨' if os.getenv('LAW_API_OC', '').strip() else '미설정'}\n"
             f"law_client 객체: {engine.law_client}\n"

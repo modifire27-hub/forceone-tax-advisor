@@ -54,7 +54,7 @@ st.markdown(
     """
     <style>
     /* ------------------------------------------------------------------
-       포스원 세무 자문 AI 시스템 - 디자인 테마
+       포스원 세무 자문 AI 시스템 - 디자인 테마 (네이비 + 골드)
        기존 위젯 동작(버튼, 폼, 인풋)은 그대로 두고 색/모양만 입힌 CSS.
        Streamlit 기본 마크업 구조에 의존하므로, 버전 업그레이드 시
        data-testid 셀렉터가 바뀌면 일부 효과가 사라질 수 있음(동작에는
@@ -62,36 +62,31 @@ st.markdown(
        ------------------------------------------------------------------ */
 
     :root {
-        --pf-accent: #2563eb;
-        --pf-accent-dark: #1d4ed8;
-        --pf-accent-bg: #eff6ff;
-        --pf-accent-border: #bfdbfe;
-        --pf-text-strong: #1e3a5f;
+        --pf-navy: #0c2340;
+        --pf-navy-light: #15335c;
+        --pf-gold: #e0b020;
+        --pf-gold-text: #2b1d00;
+        --pf-gold-strong: #8a6314;
+        --pf-text-strong: #0c2340;
         --pf-text-muted: #6b7280;
         --pf-border: #e5e7eb;
-        --pf-success-bg: #ecfdf5;
-        --pf-success-border: #a7f3d0;
-        --pf-success-text: #047857;
+        --pf-sidebar-label: #8fa6c4;
+        --pf-sidebar-border: rgba(255, 255, 255, 0.15);
     }
 
     .block-container { max-width: 880px; padding-top: 2.2rem; }
 
     /* 페이지 타이틀 영역 ------------------------------------------------ */
     .pf-header-row {
-        display: flex; align-items: center; gap: 12px; margin-bottom: 0.2rem;
-    }
-    .pf-header-icon {
-        width: 38px; height: 38px; border-radius: 10px;
-        background: var(--pf-accent-bg); border: 1px solid var(--pf-accent-border);
-        display: flex; align-items: center; justify-content: center;
-        font-size: 19px; flex-shrink: 0;
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: 12px; margin-bottom: 0.2rem;
     }
     .pf-header-title {
-        font-size: 1.55rem; font-weight: 700; color: var(--pf-text-strong);
-        margin: 0; line-height: 1.25;
+        font-size: 1.65rem; font-weight: 700; color: var(--pf-text-strong);
+        margin: 0; line-height: 1.25; letter-spacing: -0.01em;
     }
     .pf-header-caption {
-        color: var(--pf-text-muted); font-size: 0.92rem; margin: 0.1rem 0 0 50px;
+        color: var(--pf-text-muted); font-size: 0.92rem; margin: 0.1rem 0 0 0;
     }
 
     /* 질의/답변 카드 ----------------------------------------------------- */
@@ -103,12 +98,21 @@ st.markdown(
         color: var(--pf-text-muted); font-size: 0.78rem;
         margin-bottom: 0.15rem;
     }
+    /* "1. 질의 요지" 등 ### 헤딩이 답변 본문(markdown) 안에 ###으로 올 때 -
+       Streamlit이 이를 h3로 렌더링하므로 본문 영역 안의 h3만 골드 강조 */
+    div[data-testid="stMarkdownContainer"] h3 {
+        font-size: 1.05rem !important;
+        font-weight: 700 !important;
+        color: var(--pf-gold-strong) !important;
+        margin-top: 0.9rem !important;
+        margin-bottom: 0.4rem !important;
+    }
 
     /* 진행 중인 대화 배지 ------------------------------------------------- */
     .thread-badge {
         display: inline-flex; align-items: center; gap: 6px;
-        background: var(--pf-accent-bg); color: var(--pf-accent-dark);
-        border: 1px solid var(--pf-accent-border);
+        background: #eef3f9; color: var(--pf-text-strong);
+        border: 1px solid #d6e2ef;
         border-radius: 999px; padding: 5px 14px; font-size: 0.82rem;
         font-weight: 600;
     }
@@ -119,15 +123,54 @@ st.markdown(
         border-color: var(--pf-border) !important;
     }
 
-    /* primary 버튼(조회, 확정 저장 실행 등) -> 포인트 컬러로 채움 */
+    /* ------------------------------------------------------------------
+       로그인 카드 - 네이비 배경으로 강조 (.pf-login-marker가 있는 컨테이너만)
+       주의: :has() 선택자는 Chrome 105+ / Edge / Safari 15.4+ 에서 동작함.
+       구형 브라우저(또는 회사 정책상 오래된 IE 기반 브라우저)에서는 카드가
+       네이비로 보이지 않고 기본 흰 배경으로만 나타남 — 기능에는 영향 없음.
+       ------------------------------------------------------------------ */
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.pf-login-marker) {
+        background-color: var(--pf-navy) !important;
+        border-color: var(--pf-navy) !important;
+        max-width: 460px;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.pf-login-marker) * {
+        color: #ffffff !important;
+    }
+    .pf-login-eyebrow {
+        font-size: 0.82rem; font-weight: 600; color: #9db4d4 !important;
+        letter-spacing: 0.02em; margin: 0 0 4px;
+    }
+    .pf-login-heading {
+        font-size: 1.2rem; font-weight: 600; color: #ffffff !important;
+        margin: 0 0 6px;
+    }
+    .pf-login-desc {
+        font-size: 0.85rem; color: #b8c7dc !important; line-height: 1.5;
+        margin: 0 0 14px;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.pf-login-marker) input {
+        background-color: rgba(255, 255, 255, 0.08) !important;
+        border-color: rgba(255, 255, 255, 0.25) !important;
+        color: #ffffff !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.pf-login-marker) button[kind="primary"] {
+        background-color: var(--pf-gold) !important;
+        border-color: var(--pf-gold) !important;
+        color: var(--pf-gold-text) !important;
+    }
+
+    /* primary 버튼(조회, 확정 저장 실행, 입장 등) -> 골드로 채움 */
     button[kind="primary"], button[kind="primaryFormSubmit"] {
-        background-color: var(--pf-accent) !important;
-        border-color: var(--pf-accent) !important;
-        color: #fff !important;
+        background-color: var(--pf-gold) !important;
+        border-color: var(--pf-gold) !important;
+        color: var(--pf-gold-text) !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.02em !important;
     }
     button[kind="primary"]:hover, button[kind="primaryFormSubmit"]:hover {
-        background-color: var(--pf-accent-dark) !important;
-        border-color: var(--pf-accent-dark) !important;
+        background-color: #c79a1c !important;
+        border-color: #c79a1c !important;
     }
 
     /* st.info / st.success / st.warning 박스 라운드 처리 */
@@ -135,13 +178,74 @@ st.markdown(
         border-radius: 10px !important;
     }
 
-    /* 사이드바 섹션 제목과의 간격 정리 */
+    /* 구분선 여백 약간 축소 (섹션이 많아 답답해 보이는 것 방지) */
+    hr { margin: 1.1rem 0; }
+
+    /* ------------------------------------------------------------------
+       사이드바 - 네이비 배경으로 메인 화면과 톤 통일
+       ------------------------------------------------------------------ */
+    section[data-testid="stSidebar"] {
+        background-color: var(--pf-navy) !important;
+    }
+    section[data-testid="stSidebar"] * {
+        color: #ffffff !important;
+        text-align: left !important;
+    }
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+        color: #ffffff !important;
+        font-weight: 600 !important;
+        text-align: left !important;
+    }
+    /* 사이드바 보조 설명 텍스트(캡션, 작은 글씨)는 옅은 블루그레이로 */
+    section[data-testid="stSidebar"] small,
+    section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+        color: var(--pf-sidebar-label) !important;
+    }
     section[data-testid="stSidebar"] h3 {
         margin-top: 0.3rem;
     }
-
-    /* 구분선 여백 약간 축소 (섹션이 많아 답답해 보이는 것 방지) */
-    hr { margin: 1.1rem 0; }
+    /* 사이드바 구분선 */
+    section[data-testid="stSidebar"] hr {
+        border-color: var(--pf-sidebar-border) !important;
+    }
+    /* 사이드바 입력창/슬라이더/버튼 영역은 어두운 배경에 맞춰 대비 보정 */
+    section[data-testid="stSidebar"] input[type="text"],
+    section[data-testid="stSidebar"] input[type="password"],
+    section[data-testid="stSidebar"] textarea {
+        background-color: rgba(255, 255, 255, 0.08) !important;
+        border-color: rgba(255, 255, 255, 0.25) !important;
+        color: #ffffff !important;
+    }
+    section[data-testid="stSidebar"] button {
+        background-color: rgba(255, 255, 255, 0.08) !important;
+        border-color: rgba(255, 255, 255, 0.3) !important;
+        color: #ffffff !important;
+        text-align: center !important;
+    }
+    section[data-testid="stSidebar"] button[kind="primary"] {
+        background-color: var(--pf-gold) !important;
+        border-color: var(--pf-gold) !important;
+        color: var(--pf-gold-text) !important;
+    }
+    /* 사이드바 라디오 버튼 선택색 -> 골드 포인트 */
+    section[data-testid="stSidebar"] [data-baseweb="radio"] [aria-checked="true"] > div:first-child {
+        border-color: var(--pf-gold) !important;
+        background-color: var(--pf-gold) !important;
+    }
+    /* 사이드바 슬라이더 트랙/손잡이 -> 골드 포인트 */
+    section[data-testid="stSidebar"] [data-baseweb="slider"] div[role="slider"] {
+        background-color: var(--pf-gold) !important;
+    }
+    /* 사이드바 안의 st.success("구글 시트 로깅 사용 중") 배지 - 어두운 배경에서도 또렷하게 */
+    section[data-testid="stSidebar"] div[data-testid="stAlert"] {
+        background-color: rgba(34, 197, 94, 0.15) !important;
+        border: 1px solid rgba(34, 197, 94, 0.4) !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stAlert"] * {
+        color: #b9f3cf !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -150,7 +254,6 @@ st.markdown(
 st.markdown(
     """
     <div class="pf-header-row">
-        <div class="pf-header-icon">🧮</div>
         <p class="pf-header-title">포스원 세무 자문 AI 시스템</p>
     </div>
     <p class="pf-header-caption">기장 직원 / 회계사를 위한 세무질의 실시간 응답 도구</p>
@@ -189,12 +292,20 @@ def check_app_password() -> bool:
         )
         return True
 
-    st.subheader("사내 로그인")
-    st.caption("포스원 회계법인 직원 전용 화면입니다. 사내 공통 비밀번호를 입력해주세요.")
+    login_box = st.container(border=True)
+    with login_box:
+        st.markdown('<div class="pf-login-marker"></div>', unsafe_allow_html=True)
+        st.markdown('<p class="pf-login-eyebrow">사내 로그인</p>', unsafe_allow_html=True)
+        st.markdown('<p class="pf-login-heading">비밀번호를 입력해주세요</p>', unsafe_allow_html=True)
+        st.markdown(
+            '<p class="pf-login-desc">포스원 회계법인 직원 전용 화면입니다.<br>'
+            '사내 공통 비밀번호를 입력해주세요.</p>',
+            unsafe_allow_html=True,
+        )
 
-    with st.form("app_login_form"):
-        pw_input = st.text_input("비밀번호", type="password")
-        submitted = st.form_submit_button("입장")
+        with st.form("app_login_form"):
+            pw_input = st.text_input("비밀번호", type="password", label_visibility="collapsed")
+            submitted = st.form_submit_button("입장", type="primary")
 
     if submitted:
         if pw_input == correct_password:

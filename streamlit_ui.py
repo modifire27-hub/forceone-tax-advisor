@@ -53,20 +53,110 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    .block-container { max-width: 880px; }
-    .qa-question { font-weight: 600; color: #1f3a5f; margin-bottom: 0.2rem; }
-    .qa-meta { color: #888; font-size: 0.8rem; }
-    .thread-badge {
-        display: inline-block; background: #eef3fa; color: #1f3a5f;
-        border-radius: 4px; padding: 2px 8px; font-size: 0.78rem; margin-bottom: 6px;
+    /* ------------------------------------------------------------------
+       포스원 세무 자문 AI 시스템 - 디자인 테마
+       기존 위젯 동작(버튼, 폼, 인풋)은 그대로 두고 색/모양만 입힌 CSS.
+       Streamlit 기본 마크업 구조에 의존하므로, 버전 업그레이드 시
+       data-testid 셀렉터가 바뀌면 일부 효과가 사라질 수 있음(동작에는
+       영향 없음 — 순수 스타일 레이어).
+       ------------------------------------------------------------------ */
+
+    :root {
+        --pf-accent: #2563eb;
+        --pf-accent-dark: #1d4ed8;
+        --pf-accent-bg: #eff6ff;
+        --pf-accent-border: #bfdbfe;
+        --pf-text-strong: #1e3a5f;
+        --pf-text-muted: #6b7280;
+        --pf-border: #e5e7eb;
+        --pf-success-bg: #ecfdf5;
+        --pf-success-border: #a7f3d0;
+        --pf-success-text: #047857;
     }
+
+    .block-container { max-width: 880px; padding-top: 2.2rem; }
+
+    /* 페이지 타이틀 영역 ------------------------------------------------ */
+    .pf-header-row {
+        display: flex; align-items: center; gap: 12px; margin-bottom: 0.2rem;
+    }
+    .pf-header-icon {
+        width: 38px; height: 38px; border-radius: 10px;
+        background: var(--pf-accent-bg); border: 1px solid var(--pf-accent-border);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 19px; flex-shrink: 0;
+    }
+    .pf-header-title {
+        font-size: 1.55rem; font-weight: 700; color: var(--pf-text-strong);
+        margin: 0; line-height: 1.25;
+    }
+    .pf-header-caption {
+        color: var(--pf-text-muted); font-size: 0.92rem; margin: 0.1rem 0 0 50px;
+    }
+
+    /* 질의/답변 카드 ----------------------------------------------------- */
+    .qa-question {
+        font-weight: 700; color: var(--pf-text-strong);
+        margin-bottom: 0.35rem; font-size: 1.02rem;
+    }
+    .qa-meta {
+        color: var(--pf-text-muted); font-size: 0.78rem;
+        margin-bottom: 0.15rem;
+    }
+
+    /* 진행 중인 대화 배지 ------------------------------------------------- */
+    .thread-badge {
+        display: inline-flex; align-items: center; gap: 6px;
+        background: var(--pf-accent-bg); color: var(--pf-accent-dark);
+        border: 1px solid var(--pf-accent-border);
+        border-radius: 999px; padding: 5px 14px; font-size: 0.82rem;
+        font-weight: 600;
+    }
+
+    /* st.container(border=True) 카드 -> 살짝 더 또렷하게 */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-radius: 12px !important;
+        border-color: var(--pf-border) !important;
+    }
+
+    /* primary 버튼(조회, 확정 저장 실행 등) -> 포인트 컬러로 채움 */
+    button[kind="primary"], button[kind="primaryFormSubmit"] {
+        background-color: var(--pf-accent) !important;
+        border-color: var(--pf-accent) !important;
+        color: #fff !important;
+    }
+    button[kind="primary"]:hover, button[kind="primaryFormSubmit"]:hover {
+        background-color: var(--pf-accent-dark) !important;
+        border-color: var(--pf-accent-dark) !important;
+    }
+
+    /* st.info / st.success / st.warning 박스 라운드 처리 */
+    div[data-testid="stAlert"] {
+        border-radius: 10px !important;
+    }
+
+    /* 사이드바 섹션 제목과의 간격 정리 */
+    section[data-testid="stSidebar"] h3 {
+        margin-top: 0.3rem;
+    }
+
+    /* 구분선 여백 약간 축소 (섹션이 많아 답답해 보이는 것 방지) */
+    hr { margin: 1.1rem 0; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-st.title("포스원 세무 자문 AI 시스템")
-st.caption("기장 직원/회계사를 위한 세무질의 실시간 응답 도구")
+st.markdown(
+    """
+    <div class="pf-header-row">
+        <div class="pf-header-icon">🧮</div>
+        <p class="pf-header-title">포스원 세무 자문 AI 시스템</p>
+    </div>
+    <p class="pf-header-caption">기장 직원 / 회계사를 위한 세무질의 실시간 응답 도구</p>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # ----------------------------------------------------------------------

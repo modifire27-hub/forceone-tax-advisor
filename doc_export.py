@@ -93,8 +93,34 @@ def build_docx_bytes(title: str, question: str, response_md: str) -> bytes:
     """
     from io import BytesIO
     from docx import Document
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Pt, RGBColor, Cm
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    # ------------------------------------------------------------------
+    # 디자인 테마 (streamlit_ui.py 화면 디자인과 색감을 통일)
+    # 포인트 컬러: 짙은 블루(#2563EB), 제목 텍스트: 네이비(#1E3A5F),
+    # 보조 텍스트: 중간 회색(#6B7280)
+    # ------------------------------------------------------------------
+    PF_ACCENT = RGBColor(0x25, 0x63, 0xEB)
+    PF_TEXT_STRONG = RGBColor(0x1E, 0x3A, 0x5F)
+    PF_TEXT_MUTED = RGBColor(0x6B, 0x72, 0x80)
+    PF_BORDER_GRAY = "D1D5DB"
+
+    def _set_paragraph_border_bottom(paragraph, color_hex="2563EB", size=12):
+        """문단 아래쪽에 단일 보더(가로줄)를 추가하는 저수준 OOXML 조작 헬퍼.
+        python-docx는 문단 보더를 직접 지원하지 않아 XML을 수동으로 삽입함."""
+        p_pr = paragraph._p.get_or_add_pPr()
+        p_borders = OxmlElement("w:pBdr")
+        bottom = OxmlElement("w:bottom")
+        bottom.set(qn("w:val"), "single")
+        bottom.set(qn("w:sz"), str(size))
+        bottom.set(qn("w:space"), "4")
+        bottom.set(qn("w:color"), color_hex)
+        p_borders.append(bottom)
+        p_pr.append(p_borders)
 
     doc = Document()
 
@@ -102,46 +128,83 @@ def build_docx_bytes(title: str, question: str, response_md: str) -> bytes:
     style = doc.styles["Normal"]
     style.font.name = "맑은 고딕"
     style.font.size = Pt(10.5)
+    style.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
 
-    # 제목
-    title_p = doc.add_heading(title, level=1)
+    # 표지 영역 ---------------------------------------------------------
+    # 제목: 포인트 컬러 굵게 + 아래 강조선으로 화면 헤더의 느낌을 재현
+    title_p = doc.add_paragraph()
     title_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    title_run = title_p.add_run(title)
+    title_run.font.size = Pt(20)
+    title_run.font.bold = True
+    title_run.font.color.rgb = PF_TEXT_STRONG
+    title_run.font.name = "맑은 고딕"
+    _set_paragraph_border_bottom(title_p, color_hex="2563EB", size=16)
+    title_p.paragraph_format.space_after = Pt(10)
 
-    # 메타 정보
+    # 메타 정보 (생성일시) - 보조 텍스트 색
     meta = doc.add_paragraph()
-    meta.add_run(f"생성일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}").italic = True
+    meta.paragraph_format.space_after = Pt(16)
+    meta_run = meta.add_run(f"생성일시  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    meta_run.italic = True
+    meta_run.font.size = Pt(9)
+    meta_run.font.color.rgb = PF_TEXT_MUTED
+
+    def _add_section_heading(text, level=2):
+        """포인트 컬러를 쓰는 섹션 제목 (## , ### 공통 처리)"""
+        h = doc.add_heading(level=level)
+        h.paragraph_format.space_before = Pt(14)
+        h.paragraph_format.space_after = Pt(6)
+        run = h.add_run(text)
+        run.font.color.rgb = PF_ACCENT if level == 2 else PF_TEXT_STRONG
+        run.font.name = "맑은 고딕"
+        run.font.size = Pt(14) if level == 2 else Pt(12)
+        run.font.bold = True
+        return h
 
     if question:
-        doc.add_heading("질의 내용", level=2)
-        doc.add_paragraph(question)
+        _add_section_heading("질의 내용", level=2)
+        q_p = doc.add_paragraph(question)
+        q_p.paragraph_format.space_after = Pt(10)
 
-    doc.add_heading("AI 회신", level=2)
+    _add_section_heading("AI 회신", level=2)
 
     for kind, content in _parse_markdown_lines(response_md):
         if kind == "blank":
             continue
         elif kind == "h3":
-            doc.add_heading(content, level=3)
+            _add_section_heading(content, level=3)
         elif kind == "h2":
-            doc.add_heading(content, level=2)
+            _add_section_heading(content, level=2)
         elif kind == "h1":
-            doc.add_heading(content, level=1)
+            _add_section_heading(content, level=2)
         elif kind == "bullet":
             p = doc.add_paragraph(style="List Bullet")
             for text, is_bold in _split_bold(content):
                 run = p.add_run(text)
                 run.bold = is_bold
+                if is_bold:
+                    run.font.color.rgb = PF_TEXT_STRONG
         else:  # text
             p = doc.add_paragraph()
+            p.paragraph_format.space_after = Pt(4)
             for text, is_bold in _split_bold(content):
                 run = p.add_run(text)
                 run.bold = is_bold
+                if is_bold:
+                    run.font.color.rgb = PF_TEXT_STRONG
+
+    # 푸터 -----------------------------------------------------------
+    footer_p = doc.add_paragraph()
+    footer_p.paragraph_format.space_before = Pt(20)
+    _set_paragraph_border_bottom(footer_p, color_hex=PF_BORDER_GRAY, size=4)
+    footer_p.paragraph_format.space_after = Pt(4)
 
     footer = doc.add_paragraph()
     footer_run = footer.add_run("포스원 회계법인 세무질의 AI 시스템 자동 생성")
     footer_run.italic = True
     footer_run.font.size = Pt(9)
-    footer_run.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
+    footer_run.font.color.rgb = PF_TEXT_MUTED
 
     buffer = BytesIO()
     doc.save(buffer)
@@ -208,25 +271,45 @@ def build_pdf_bytes(title: str, question: str, response_md: str) -> bytes:
             "대신 Word(.docx) 또는 마크다운(.md) 형식으로 받아주세요."
         )
 
+    # 디자인 테마 (streamlit_ui.py / build_docx_bytes와 색감 통일)
+    PF_ACCENT = (37, 99, 235)        # #2563EB
+    PF_TEXT_STRONG = (30, 58, 95)    # #1E3A5F
+    PF_TEXT_MUTED = (107, 114, 128)  # #6B7280
+    PF_TEXT_BODY = (51, 51, 51)      # #333333
+    PF_BORDER_GRAY = (209, 213, 219)  # #D1D5DB
+
     pdf = FPDF()
     pdf.add_page()
     pdf.add_font("korean", "", font_path)
-    pdf.set_font("korean", size=14)
+    pdf.set_font("korean", size=18)
 
-    pdf.multi_cell(0, 10, title)
+    # 표지 영역: 포인트 컬러 제목 + 아래 강조선 -------------------------
+    pdf.set_text_color(*PF_TEXT_STRONG)
+    pdf.multi_cell(0, 11, title)
+    pdf.set_draw_color(*PF_ACCENT)
+    pdf.set_line_width(0.8)
+    line_y = pdf.get_y() + 1
+    pdf.line(pdf.l_margin, line_y, pdf.w - pdf.r_margin, line_y)
+    pdf.ln(5)
+
     pdf.set_font("korean", size=9)
-    pdf.multi_cell(0, 6, f"생성일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    pdf.set_text_color(*PF_TEXT_MUTED)
+    pdf.multi_cell(0, 6, f"생성일시  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     pdf.ln(4)
 
     if question:
-        pdf.set_font("korean", size=12)
+        pdf.set_font("korean", size=13)
+        pdf.set_text_color(*PF_ACCENT)
         pdf.multi_cell(0, 8, "질의 내용")
         pdf.set_font("korean", size=10)
+        pdf.set_text_color(*PF_TEXT_BODY)
         pdf.multi_cell(0, 6, question)
         pdf.ln(4)
 
-    pdf.set_font("korean", size=12)
+    pdf.set_font("korean", size=13)
+    pdf.set_text_color(*PF_ACCENT)
     pdf.multi_cell(0, 8, "AI 회신")
+    pdf.set_text_color(*PF_TEXT_BODY)
     pdf.ln(1)
 
     for kind, content in _parse_markdown_lines(response_md):
@@ -235,17 +318,27 @@ def build_pdf_bytes(title: str, question: str, response_md: str) -> bytes:
             continue
         plain_text = content.replace("**", "")  # PDF에서는 굵게 폰트 별도 미적용(가독성 우선 단순화)
         if kind in ("h1", "h2", "h3"):
-            pdf.set_font("korean", size=12)
+            size = 13 if kind == "h2" else 12
+            pdf.set_font("korean", size=size)
+            pdf.set_text_color(*PF_TEXT_STRONG)
             pdf.ln(2)
             pdf.multi_cell(0, 7, plain_text)
             pdf.set_font("korean", size=10)
+            pdf.set_text_color(*PF_TEXT_BODY)
         elif kind == "bullet":
             pdf.multi_cell(0, 6, f"  - {plain_text}")
         else:
             pdf.multi_cell(0, 6, plain_text)
 
+    # 푸터: 옅은 회색 구분선 + 보조 텍스트 -------------------------------
     pdf.ln(6)
+    pdf.set_draw_color(*PF_BORDER_GRAY)
+    pdf.set_line_width(0.3)
+    footer_line_y = pdf.get_y()
+    pdf.line(pdf.l_margin, footer_line_y, pdf.w - pdf.r_margin, footer_line_y)
+    pdf.ln(3)
     pdf.set_font("korean", size=8)
+    pdf.set_text_color(*PF_TEXT_MUTED)
     pdf.multi_cell(0, 5, "포스원 회계법인 세무질의 AI 시스템 자동 생성")
 
     return bytes(pdf.output())

@@ -124,37 +124,42 @@ st.markdown(
     }
 
     /* ------------------------------------------------------------------
-       로그인 카드 - 네이비 배경으로 강조 (.pf-login-marker가 있는 컨테이너만)
-       주의: :has() 선택자는 Chrome 105+ / Edge / Safari 15.4+ 에서 동작함.
-       구형 브라우저(또는 회사 정책상 오래된 IE 기반 브라우저)에서는 카드가
-       네이비로 보이지 않고 기본 흰 배경으로만 나타남 — 기능에는 영향 없음.
+       로그인 패널 - 네이비 배경 (브라우저 호환성 문제 없는 순수 HTML 블록)
+       st.container(key="pf_login_wrap")로 감싼 영역 안에서만 적용되도록
+       .st-key-pf_login_wrap으로 범위를 한정함 (다른 st.form에 영향 없음).
        ------------------------------------------------------------------ */
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(.pf-login-marker) {
-        background-color: var(--pf-navy) !important;
-        border-color: var(--pf-navy) !important;
+    .pf-login-panel {
+        background-color: var(--pf-navy);
+        border-radius: 12px 12px 0 0;
+        padding: 1.75rem 2rem 1.5rem;
         max-width: 460px;
     }
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(.pf-login-marker) * {
-        color: #ffffff !important;
-    }
     .pf-login-eyebrow {
-        font-size: 0.82rem; font-weight: 600; color: #9db4d4 !important;
+        font-size: 0.82rem; font-weight: 600; color: #cfe0f3;
         letter-spacing: 0.02em; margin: 0 0 4px;
     }
     .pf-login-heading {
-        font-size: 1.2rem; font-weight: 600; color: #ffffff !important;
+        font-size: 1.2rem; font-weight: 600; color: #ffffff;
         margin: 0 0 6px;
     }
     .pf-login-desc {
-        font-size: 0.85rem; color: #b8c7dc !important; line-height: 1.5;
-        margin: 0 0 14px;
+        font-size: 0.85rem; color: #d7e3f0; line-height: 1.55;
+        margin: 0;
     }
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(.pf-login-marker) input {
-        background-color: rgba(255, 255, 255, 0.08) !important;
-        border-color: rgba(255, 255, 255, 0.25) !important;
+    /* 로그인 패널 바로 아래의 form(입력창+버튼)만 같은 폭의 박스로 이어붙임 */
+    .st-key-pf_login_wrap div[data-testid="stForm"] {
+        max-width: 460px;
+        background-color: var(--pf-navy-light);
+        border: none !important;
+        border-radius: 0 0 12px 12px;
+        padding: 1.25rem 2rem 1.75rem !important;
+    }
+    .st-key-pf_login_wrap div[data-testid="stForm"] input {
+        background-color: rgba(255, 255, 255, 0.1) !important;
+        border-color: rgba(255, 255, 255, 0.3) !important;
         color: #ffffff !important;
     }
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(.pf-login-marker) button[kind="primary"] {
+    .st-key-pf_login_wrap button[kind="primaryFormSubmit"] {
         background-color: var(--pf-gold) !important;
         border-color: var(--pf-gold) !important;
         color: var(--pf-gold-text) !important;
@@ -210,6 +215,12 @@ st.markdown(
     section[data-testid="stSidebar"] hr {
         border-color: var(--pf-sidebar-border) !important;
     }
+    /* 사이드바 내 인라인 코드(백틱) - 경로 표시 등의 가독성 보정 */
+    section[data-testid="stSidebar"] code {
+        background-color: rgba(255, 255, 255, 0.12) !important;
+        color: #e8f0fb !important;
+        border-radius: 4px !important;
+    }
     /* 사이드바 입력창/슬라이더/버튼 영역은 어두운 배경에 맞춰 대비 보정 */
     section[data-testid="stSidebar"] input[type="text"],
     section[data-testid="stSidebar"] input[type="password"],
@@ -252,12 +263,8 @@ st.markdown(
 )
 
 st.markdown(
-    """
-    <div class="pf-header-row">
-        <p class="pf-header-title">포스원 세무 자문 AI 시스템</p>
-    </div>
-    <p class="pf-header-caption">기장 직원 / 회계사를 위한 세무질의 실시간 응답 도구</p>
-    """,
+    '<div class="pf-header-row"><p class="pf-header-title">포스원 세무 자문 AI 시스템</p></div>'
+    '<p class="pf-header-caption">기장 직원 / 회계사를 위한 세무질의 실시간 응답 도구</p>',
     unsafe_allow_html=True,
 )
 
@@ -292,14 +299,15 @@ def check_app_password() -> bool:
         )
         return True
 
-    login_box = st.container(border=True)
-    with login_box:
-        st.markdown('<div class="pf-login-marker"></div>', unsafe_allow_html=True)
-        st.markdown('<p class="pf-login-eyebrow">사내 로그인</p>', unsafe_allow_html=True)
-        st.markdown('<p class="pf-login-heading">비밀번호를 입력해주세요</p>', unsafe_allow_html=True)
+    login_wrap = st.container(key="pf_login_wrap")
+    with login_wrap:
         st.markdown(
+            '<div class="pf-login-panel">'
+            '<p class="pf-login-eyebrow">사내 로그인</p>'
+            '<p class="pf-login-heading">비밀번호를 입력해주세요</p>'
             '<p class="pf-login-desc">포스원 회계법인 직원 전용 화면입니다.<br>'
-            '사내 공통 비밀번호를 입력해주세요.</p>',
+            '사내 공통 비밀번호를 입력해주세요.</p>'
+            '</div>',
             unsafe_allow_html=True,
         )
 

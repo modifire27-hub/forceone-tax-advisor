@@ -1613,7 +1613,7 @@ if __name__ == "__main__":
             print("\n종료합니다.")
             break
 
-        print("\n조회 중입니다 (3~5초 소요)...\n")
+        print("\n조회 중입니다...\n")
         answer = engine.generate_guideline_with_retry(question)
         print("-" * 60)
         print(answer)

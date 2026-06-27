@@ -1219,7 +1219,7 @@ if submitted:
         # 맞나?"하는 불안감을 줄 수 있음. 그래서 로딩 중에도 방금 입력했던 질문을
         # 그대로 화면에 보여줘서, 무엇을 처리 중인지 명확하게 함.
         st.info(f"질문을 처리 중입니다:\n\n**{user_question.strip()}**")
-        with st.spinner("AI가 답변을 생성 중입니다 (3~5초 소요)..."):
+        with st.spinner("AI가 답변을 생성 중입니다..."):
             answer = engine.generate_guideline_with_retry(
                 user_question.strip(),
                 thread_history=st.session_state.current_thread,

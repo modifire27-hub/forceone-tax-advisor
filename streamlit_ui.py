@@ -405,8 +405,22 @@ def render_confirm_to_kb_button(question: str, answer: str, key_prefix: str, dia
             "key_prefix": key_prefix,
         }
         # 이전에 다른 항목을 검증/수정하던 상태가 남아있으면 깨끗하게 초기화
+        #
+        # 버그 수정 (2026-06-27 — "검증은 정확했는데 화면엔 원본이 남는" 문제):
+        # 기존에는 여기서 edited_content를 answer(검증 전 원본)로 즉시 채워
+        # 넣었음. 그런데 아래 render_confirm_to_kb_workspace()의 2단계는
+        # "edited_key가 세션 상태에 아예 없을 때만" corrected_content로 채우는
+        # 구조라서, 여기서 미리 answer를 넣어두면 그 조건이 항상 False가 되어
+        # 검증 후 자동 수정 결과가 텍스트칸에 반영되지 못하고 원본 answer가
+        # 그대로 남는 문제가 있었음. "수정 사항" 요약에는 정확한 수정 내용이
+        # 표시되지만(엔진은 정상 동작), 실제 저장 대상 텍스트는 그대로인
+        # 자기모순이 화면에서 발생함.
+        # 해결: 여기서는 edited_content 키 자체를 세션 상태에서 제거함(아직
+        # 검증 전이므로 값이 존재하지 않아야 정상). 그래야 검증이 끝난 뒤
+        # 2단계에서 "키가 없다"는 조건이 True가 되어 corrected_content가
+        # 정상적으로 채워짐.
         st.session_state[f"{key_prefix}_verification_result"] = None
-        st.session_state[f"{key_prefix}_edited_content"] = answer
+        st.session_state.pop(f"{key_prefix}_edited_content", None)
 
         if dialog_row_key:
             # 다이얼로그 안에서 호출된 경우: 다이얼로그를 닫고 메인 화면으로 이동

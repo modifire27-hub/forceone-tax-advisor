@@ -53,6 +53,22 @@ class SheetLogger:
     KNOWLEDGE_SHEET_NAME = "지식베이스"
     KNOWLEDGE_HEADER = ["일시", "분류", "질문", "확정내용"]
 
+    # 검증대기 탭(워크시트) 이름 및 헤더
+    # 설계 의도 (2026-06-27 추가 — WebSocket 연결 끊김으로 인한 작업 손실 방지):
+    # - Streamlit Cloud는 브라우저-서버 간 WebSocket 연결이 간헐적으로 끊기면
+    #   세션(session_state)이 통째로 초기화되는 알려진 플랫폼 특성이 있음. 이게
+    #   "지식베이스에 확정 저장" 흐름 중간(검증 완료 후 PIN 입력 전)에 발생하면,
+    #   회계사가 다시 로그인 → 검색기록에서 같은 항목 찾기 → 웹검색 재검증을
+    #   처음부터 다시 돌려야 하는 큰 불편이 있었음.
+    # - 해결: 검증(_run_verification_search + _apply_corrections)이 끝나는 즉시,
+    #   그 결과(원본 질문, 수정된 최종본, 추천 파일, 수정 요약)를 이 탭에 1행으로
+    #   자동 저장해둠. 화면이 튕겨도 사이드바의 "검증대기 불러오기"로 즉시 복원
+    #   가능 — 웹검색을 다시 돌릴 필요 없이 PIN 입력 단계로 바로 진입함.
+    # - 확정 저장이 완료되면 해당 행은 자동 삭제됨(완료된 항목이 계속 쌓이지
+    #   않도록). 즉 이 탭은 "현재 진행 중인 작업"만 담는 임시 작업공간임.
+    PENDING_SHEET_NAME = "검증대기"
+    PENDING_HEADER = ["일시", "질문", "원본답변", "수정된내용", "수정요약", "추천파일", "추천이유"]
+
     def __init__(self, sheet_id: str = None, credentials_path: str = None, credentials_json: str = None):
         """
         Parameters
@@ -76,6 +92,7 @@ class SheetLogger:
         self.sheet = None
         self.summary_sheet = None
         self.knowledge_sheet = None
+        self.pending_sheet = None
         self.error_message = ""
 
         sheet_id = (sheet_id or os.getenv("GOOGLE_SHEET_ID", "")).strip()
@@ -139,6 +156,18 @@ class SheetLogger:
             existing_knowledge_header = self.knowledge_sheet.row_values(1)
             if existing_knowledge_header != self.KNOWLEDGE_HEADER:
                 self.knowledge_sheet.insert_row(self.KNOWLEDGE_HEADER, 1)
+
+            # 검증대기 탭 확인/생성 (없으면 새로 만듦)
+            try:
+                self.pending_sheet = spreadsheet.worksheet(self.PENDING_SHEET_NAME)
+            except gspread.exceptions.WorksheetNotFound:
+                self.pending_sheet = spreadsheet.add_worksheet(
+                    title=self.PENDING_SHEET_NAME, rows=50, cols=len(self.PENDING_HEADER)
+                )
+
+            existing_pending_header = self.pending_sheet.row_values(1)
+            if existing_pending_header != self.PENDING_HEADER:
+                self.pending_sheet.insert_row(self.PENDING_HEADER, 1)
 
             self.enabled = True
             self.error_message = ""  # 성공했으므로 명시적으로 비움
@@ -428,6 +457,98 @@ class SheetLogger:
         except Exception as e:
             print(f"[경고] 지식베이스 시트 조회 실패: {e}")
             return []
+
+
+    # ------------------------------------------------------------------
+    # 검증대기 (구글시트 기반) - WebSocket 끊김으로 작업 중단 시 복구용 임시저장
+    # ------------------------------------------------------------------
+    def save_pending_verification(
+        self,
+        question: str,
+        original_answer: str,
+        corrected_content: str,
+        correction_summary: str,
+        recommended_file: str,
+        recommended_reason: str,
+    ) -> str:
+        """
+        검증/자동수정이 끝난 결과를 '검증대기' 탭에 한 행으로 저장.
+
+        웹검색 재검증("① 내용 검증하기")이 끝나는 즉시 호출해서, 그 결과를
+        구글시트에 즉시 백업해둠. 이후 PIN 입력 전에 화면이 튕겨도(WebSocket
+        연결 끊김 등), 사이드바에서 이 행을 불러와 검증을 다시 돌리지 않고
+        바로 PIN 입력 단계로 이어갈 수 있음.
+
+        Returns
+        -------
+        str
+            저장된 행의 식별자로 쓸 타임스탬프 문자열. 저장 실패 시 빈 문자열.
+        """
+        if not self.enabled or self.pending_sheet is None:
+            return ""
+
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.pending_sheet.append_row(
+                [
+                    timestamp,
+                    question,
+                    original_answer,
+                    corrected_content,
+                    correction_summary,
+                    recommended_file,
+                    recommended_reason,
+                ],
+                value_input_option="RAW",
+            )
+            return timestamp
+        except Exception as e:
+            print(f"[경고] 검증대기 시트 저장 실패: {e}")
+            return ""
+
+    def list_pending_verifications(self) -> list:
+        """
+        '검증대기' 탭에 남아있는 모든 항목을 가져옴 (최신순).
+        사이드바에 "이전에 검증해두고 못 저장한 항목" 목록을 보여줄 때 사용.
+
+        Returns
+        -------
+        list[dict]
+            실패하거나 항목이 없으면 빈 리스트
+        """
+        if not self.enabled or self.pending_sheet is None:
+            return []
+
+        try:
+            all_rows = self.pending_sheet.get_all_records()
+            return all_rows[::-1]  # 최신순
+        except Exception as e:
+            print(f"[경고] 검증대기 시트 조회 실패: {e}")
+            return []
+
+    def delete_pending_verification(self, timestamp: str) -> bool:
+        """
+        '검증대기' 탭에서 특정 일시(timestamp)에 해당하는 행을 삭제.
+        확정 저장이 완료된 직후, 더 이상 필요 없는 임시저장 행을 정리하기 위해 호출.
+
+        Returns
+        -------
+        bool
+            성공 여부 (해당 행을 못 찾아도 예외 없이 False만 반환)
+        """
+        if not self.enabled or self.pending_sheet is None:
+            return False
+
+        try:
+            all_values = self.pending_sheet.get_all_values()
+            for row_idx, row in enumerate(all_values[1:], start=2):
+                if len(row) >= 1 and row[0] == timestamp:
+                    self.pending_sheet.delete_rows(row_idx)
+                    return True
+            return False
+        except Exception as e:
+            print(f"[경고] 검증대기 시트 행 삭제 실패: {e}")
+            return False
 
 
 # ----------------------------------------------------------------------

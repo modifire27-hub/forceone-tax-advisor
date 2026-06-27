@@ -537,6 +537,28 @@ def render_confirm_to_kb_workspace():
         if st.button("① 내용 검증하기 (웹검색)", key=f"{key_prefix}_run_verify_btn", type="primary"):
             with st.spinner("답변 내용을 웹검색으로 재검증하는 중입니다..."):
                 st.session_state[verified_key] = engine.verify_before_confirm(question, answer)
+
+            # 안전장치 (2026-06-27 추가 — WebSocket 연결 끊김으로 인한 작업 손실 방지):
+            # Streamlit Cloud는 브라우저-서버 WebSocket 연결이 간헐적으로 끊기면
+            # session_state가 통째로 리셋되는 플랫폼 특성이 있음(코드 버그가 아니라
+            # Streamlit 자체의 알려진 동작 — GitHub streamlit/streamlit#4297,
+            # #8901 등에서 다수 보고됨). 검증이 끝난 직후 그 결과를 구글시트
+            # "검증대기" 탭에 즉시 백업해두면, 화면이 튕겨도(로그인부터 새로
+            # 시작해야 하는 상황이 되어도) 웹검색을 처음부터 다시 돌릴 필요 없이
+            # 사이드바에서 이 항목을 불러와 PIN 입력 단계로 곧바로 이어갈 수 있음.
+            if engine.sheet_logger and engine.sheet_logger.enabled:
+                verification_now = st.session_state[verified_key]
+                pending_ts = engine.sheet_logger.save_pending_verification(
+                    question=question,
+                    original_answer=answer,
+                    corrected_content=verification_now["corrected_content"],
+                    correction_summary=verification_now["correction_summary"],
+                    recommended_file=verification_now["recommended_file"],
+                    recommended_reason=verification_now["recommended_reason"],
+                )
+                if pending_ts:
+                    st.session_state[f"{key_prefix}_pending_ts"] = pending_ts
+
             st.rerun()
         else:
             st.caption("저장 전에 먼저 내용을 검증해주세요. (검증 결과는 참고용이며, 최종 판단은 회계사가 직접 합니다.)")
@@ -599,6 +621,14 @@ def render_confirm_to_kb_workspace():
                     target_file=target_file,
                 )
                 st.success(f"지식베이스에 확정 저장되었습니다: {saved_path}")
+
+                # 확정 저장이 끝났으니, 백업해둔 검증대기 행은 더 이상 필요
+                # 없음 — 정리해서 "현재 진행 중인 작업"만 남도록 함.
+                pending_ts = st.session_state.get(f"{key_prefix}_pending_ts")
+                if pending_ts and engine.sheet_logger and engine.sheet_logger.enabled:
+                    engine.sheet_logger.delete_pending_verification(pending_ts)
+                st.session_state.pop(f"{key_prefix}_pending_ts", None)
+
                 st.session_state["kb_confirm_target"] = None
                 st.session_state[verified_key] = None
             else:
@@ -826,6 +856,46 @@ with st.sidebar:
     ):
         engine.load_knowledge_base(force_reload=True)
         st.success("지식 베이스를 다시 불러왔습니다.")
+
+    # ------------------------------------------------------------------
+    # 검증대기 불러오기 (2026-06-27 추가)
+    # ------------------------------------------------------------------
+    # 설계 의도: 화면이 튕겨서(WebSocket 연결 끊김 등) 검증까지 끝낸 작업을
+    # 잃어버렸을 때, 웹검색을 처음부터 다시 돌리지 않고 여기서 즉시 복원해
+    # PIN 입력 단계로 바로 이어갈 수 있게 함.
+    if engine.sheet_logger and engine.sheet_logger.enabled:
+        pending_list = engine.sheet_logger.list_pending_verifications()
+        if pending_list:
+            st.divider()
+            st.subheader("검증대기 불러오기")
+            st.caption(
+                f"화면이 튕겨도 잃지 않도록 자동 백업된 검증 결과입니다 "
+                f"({len(pending_list)}건). 불러오면 웹검색을 다시 돌리지 않고 "
+                f"PIN 입력 단계로 바로 이동합니다."
+            )
+            for p_row in pending_list:
+                p_ts = p_row.get("일시", "")
+                p_question = p_row.get("질문", "")
+                short_q = p_question[:30] + ("..." if len(p_question) > 30 else "")
+                if st.button(f"📋 {p_ts} — {short_q}", key=f"load_pending_{p_ts}".replace(" ", "_").replace(":", "")):
+                    restore_key_prefix = f"pending_{p_ts}".replace(" ", "_").replace(":", "").replace("-", "")
+                    st.session_state["kb_confirm_target"] = {
+                        "question": p_question,
+                        "answer": p_row.get("원본답변", ""),
+                        "key_prefix": restore_key_prefix,
+                    }
+                    st.session_state[f"{restore_key_prefix}_verification_result"] = {
+                        "verification_text": "(검증대기에서 복원됨 — 원래 검증 상세 내용은 표시되지 않습니다. "
+                        "수정된 최종본은 정상적으로 복원되었습니다.)",
+                        "corrected_content": p_row.get("수정된내용", ""),
+                        "correction_summary": p_row.get("수정요약", ""),
+                        "recommended_file": p_row.get("추천파일", ""),
+                        "recommended_reason": p_row.get("추천이유", ""),
+                    }
+                    st.session_state[f"{restore_key_prefix}_edited_content"] = p_row.get("수정된내용", "")
+                    st.session_state[f"{restore_key_prefix}_pending_ts"] = p_ts
+                    st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 진행해주세요.")
+                    st.rerun()
 
     st.divider()
     st.subheader("검색 기록")

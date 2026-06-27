@@ -25,6 +25,7 @@ Windows 환경 기준으로 작성됨.
 """
 
 import os
+import hashlib
 from pathlib import Path
 from datetime import datetime
 
@@ -69,6 +70,23 @@ class SheetLogger:
     PENDING_SHEET_NAME = "검증대기"
     PENDING_HEADER = ["일시", "질문", "원본답변", "수정된내용", "수정요약", "추천파일", "추천이유"]
 
+    # 계정설정 탭(워크시트) 이름 및 헤더
+    # 설계 의도 (2026-06-27 추가 — 비밀번호를 .env/Secrets가 아닌 화면에서 관리):
+    # - 관리자(회계사)/직원 로그인 비밀번호를 처음에는 .env(로컬) 또는 Streamlit
+    #   Secrets(웹)의 ADMIN_PASSWORD/STAFF_PASSWORD로 관리했으나, 바꿀 때마다
+    #   파일을 직접 열어 고치고 재배포해야 해서 번거롭다는 피드백을 받음.
+    # - 해결: 비밀번호의 해시값을 이 구글시트 탭에 저장하고, 관리자가 로그인 후
+    #   사이드바에서 직접 변경할 수 있게 함(PIN 변경과 동일한 패턴). 평문이
+    #   아니라 sha256 해시만 저장함 — PIN 저장 방식과 동일한 보안 수준.
+    # - 이 탭에 값이 하나도 없는 상태(앱을 처음 띄운 경우)에는, 로그인 화면 대신
+    #   "최초 계정 설정" 화면을 보여줘 그 자리에서 관리자/직원 비밀번호를 처음
+    #   만들게 함. 따라서 .env/Secrets에 비밀번호를 미리 적어둘 필요가 전혀
+    #   없어짐. (이 화면은 인증 전 누구나 접근 가능하므로, 배포 직후 가능한
+    #   빨리 설정을 완료하는 것을 전제로 함 — 약한 추가 보호장치는 의도적으로
+    #   두지 않음. 그조차 별도 설정값이 필요해 번거로움을 다시 만들기 때문)
+    ACCOUNT_SHEET_NAME = "계정설정"
+    ACCOUNT_HEADER = ["역할", "비밀번호해시"]
+
     def __init__(self, sheet_id: str = None, credentials_path: str = None, credentials_json: str = None):
         """
         Parameters
@@ -93,6 +111,7 @@ class SheetLogger:
         self.summary_sheet = None
         self.knowledge_sheet = None
         self.pending_sheet = None
+        self.account_sheet = None
         self.error_message = ""
 
         sheet_id = (sheet_id or os.getenv("GOOGLE_SHEET_ID", "")).strip()
@@ -168,6 +187,18 @@ class SheetLogger:
             existing_pending_header = self.pending_sheet.row_values(1)
             if existing_pending_header != self.PENDING_HEADER:
                 self.pending_sheet.insert_row(self.PENDING_HEADER, 1)
+
+            # 계정설정 탭 확인/생성 (없으면 새로 만듦)
+            try:
+                self.account_sheet = spreadsheet.worksheet(self.ACCOUNT_SHEET_NAME)
+            except gspread.exceptions.WorksheetNotFound:
+                self.account_sheet = spreadsheet.add_worksheet(
+                    title=self.ACCOUNT_SHEET_NAME, rows=10, cols=len(self.ACCOUNT_HEADER)
+                )
+
+            existing_account_header = self.account_sheet.row_values(1)
+            if existing_account_header != self.ACCOUNT_HEADER:
+                self.account_sheet.insert_row(self.ACCOUNT_HEADER, 1)
 
             self.enabled = True
             self.error_message = ""  # 성공했으므로 명시적으로 비움
@@ -548,6 +579,83 @@ class SheetLogger:
             return False
         except Exception as e:
             print(f"[경고] 검증대기 시트 행 삭제 실패: {e}")
+            return False
+
+    # ------------------------------------------------------------------
+    # 계정설정 (구글시트 기반) - 관리자/직원 로그인 비밀번호를 화면에서 관리
+    # ------------------------------------------------------------------
+    def is_account_setup_done(self) -> bool:
+        """
+        '계정설정' 탭에 관리자/직원 비밀번호가 둘 다 설정되어 있는지 확인.
+        하나라도 없으면 "최초 계정 설정" 화면을 보여줘야 함을 의미함.
+
+        Returns
+        -------
+        bool
+            True면 이미 설정 완료. 구글시트 로깅이 비활성 상태면 항상 False를
+            반환함(이 경우 호출하는 쪽에서 .env/Secrets 기반 방식으로 폴백해야 함).
+        """
+        if not self.enabled or self.account_sheet is None:
+            return False
+
+        try:
+            rows = self.account_sheet.get_all_records()
+            roles_set = {r.get("역할") for r in rows if r.get("비밀번호해시")}
+            return "admin" in roles_set and "staff" in roles_set
+        except Exception as e:
+            print(f"[경고] 계정설정 시트 조회 실패: {e}")
+            return False
+
+    def _get_password_hash(self, role: str) -> str:
+        """role("admin" 또는 "staff")에 해당하는 저장된 비밀번호 해시를 반환. 없으면 빈 문자열."""
+        if not self.enabled or self.account_sheet is None:
+            return ""
+
+        try:
+            rows = self.account_sheet.get_all_records()
+            for r in rows:
+                if r.get("역할") == role:
+                    return str(r.get("비밀번호해시", ""))
+            return ""
+        except Exception as e:
+            print(f"[경고] 계정설정 시트 조회 실패: {e}")
+            return ""
+
+    def verify_account_password(self, role: str, input_password: str) -> bool:
+        """입력한 비밀번호가 해당 role에 저장된 해시와 일치하는지 확인."""
+        stored_hash = self._get_password_hash(role)
+        if not stored_hash:
+            return False
+        input_hash = hashlib.sha256(input_password.strip().encode("utf-8")).hexdigest()
+        return stored_hash == input_hash
+
+    def set_account_password(self, role: str, new_password: str) -> bool:
+        """
+        role("admin" 또는 "staff")의 비밀번호를 설정/변경. 평문이 아니라
+        sha256 해시만 저장함(PIN 저장 방식과 동일한 보안 수준).
+
+        기존에 그 역할의 행이 있으면 해시값만 덮어쓰고, 없으면 새 행을 추가함.
+
+        Returns
+        -------
+        bool
+            성공 여부
+        """
+        if not self.enabled or self.account_sheet is None:
+            return False
+
+        try:
+            new_hash = hashlib.sha256(new_password.strip().encode("utf-8")).hexdigest()
+            all_values = self.account_sheet.get_all_values()
+            for row_idx, row in enumerate(all_values[1:], start=2):
+                if len(row) >= 1 and row[0] == role:
+                    self.account_sheet.update_cell(row_idx, 2, new_hash)
+                    return True
+            # 기존 행이 없으면 새로 추가
+            self.account_sheet.append_row([role, new_hash], value_input_option="RAW")
+            return True
+        except Exception as e:
+            print(f"[경고] 계정설정 시트 저장 실패: {e}")
             return False
 
 

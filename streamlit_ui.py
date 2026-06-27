@@ -12,9 +12,15 @@ streamlit_ui.py
   (백로그는 삭제되지 않고 "이전 대화 보기"에서 다시 펼쳐볼 수 있음)
 - 결과 저장: 기본은 타임스탬프 자동저장, 파일명/형식(md/docx/pdf) 직접 지정 가능
 - "전체 종합" 버튼: 현재 묶음 또는 백로그 포함 전체를 AI가 하나의 완성된 자문 문서로 재구성
+- 로그인 시 관리자(회계사)/직원 비밀번호로 역할이 자동 결정됨(역할 직접 선택 단계 없음).
+  관리자만 PIN 관리, 지식베이스 확정 저장, 검증대기 불러오기에 접근 가능
 
 실행 방법:
     streamlit run streamlit_ui.py
+
+필요 환경변수(.env 또는 Streamlit Secrets):
+    ADMIN_PASSWORD   관리자(회계사) 로그인 비밀번호 (기존 APP_PASSWORD도 호환됨)
+    STAFF_PASSWORD   직원 로그인 비밀번호
 
 Windows 환경 기준으로 작성됨.
 """
@@ -34,6 +40,7 @@ load_dotenv()
 
 from tax_advisor_engine import TaxAdvisorEngine
 from doc_export import build_export_bytes, safe_filename
+from sheet_logger import SheetLogger
 
 try:
     from google.genai import types as genai_types
@@ -329,34 +336,166 @@ st.markdown(
 
 
 # ----------------------------------------------------------------------
-# 로그인 (사내 공통 비밀번호)
+# 로그인 (관리자/직원 분리 — 2026-06-27 변경)
 # ----------------------------------------------------------------------
-# 설계 의도 (2026-06-25 추가):
-# - 이 화면을 웹(Streamlit Community Cloud 등)에 올리면 주소만 알면 누구나 접근 가능해짐.
-#   그래서 "사내 직원만 들어올 수 있는 문" 역할로 공통 비밀번호 1개를 둠.
-# - 이건 PIN(사이드바의 '확정 PIN', 회계사가 지식베이스에 확정 저장할 때 쓰는 것)과는
-#   완전히 다른 레이어임. 여기 비밀번호는 "웹사이트 입장 가능 여부"만 가르고,
-#   PIN은 "지식베이스 확정 저장 가능 여부"를 가름.
-# - 비밀번호 값은 코드에 직접 적지 않고 .env(로컬) 또는 Streamlit Secrets(웹 배포 시)의
-#   APP_PASSWORD 값으로 관리함.
-# - 추후 "직원용/관리자용 비밀번호를 따로 분리"하는 더 세밀한 권한 구조로 발전시킬 수 있으나,
-#   현재는 가장 단순한 형태(공통 비밀번호 1개)로만 구현함.
-def check_app_password() -> bool:
-    """입력한 비밀번호가 APP_PASSWORD와 일치하면 True. 세션 동안 결과를 유지."""
-    if st.session_state.get("app_authenticated"):
-        return True
+# 설계 의도 (2026-06-27 변경 — 단일 공통 비밀번호에서 역할별 분리로 전환):
+# - 기존에는 APP_PASSWORD 1개로 누구나 동일하게 들어온 뒤, 사이드바의 "사용자
+#   구분" 라디오로 본인이 직접 "직원/회계사"를 선택했음. 이건 자기보고
+#   (self-report)일 뿐 실제 권한 분리가 아니었음 — 직원도 라디오에서 "회계사"를
+#   선택하면 관리자 기능(지식베이스 확정 저장)에 그대로 접근 가능했음.
+# - 변경: 비밀번호 자체를 관리자용(ADMIN_PASSWORD)과 직원용(STAFF_PASSWORD)으로
+#   분리. 로그인 화면에서 입력한 비밀번호 값으로 역할이 자동 결정되며, 이후
+#   "역할을 직접 선택하는" 단계 자체가 없음 — 그래서 사이드바의 "사용자 구분"
+#   라디오는 제거함(11번째 줄 아래 사이드바 섹션 참고).
+# - 비밀번호 값은 코드에 직접 적지 않고 .env(로컬) 또는 Streamlit Secrets(웹
+#   배포 시)의 ADMIN_PASSWORD / STAFF_PASSWORD 값으로 관리함.
+# - 하위 호환: 기존 APP_PASSWORD만 설정된 환경(아직 이번 변경을 반영해 Secrets를
+#   갱신하지 않은 경우)에서도 막히지 않도록, ADMIN_PASSWORD가 없으면
+#   APP_PASSWORD를 관리자 비밀번호로 대신 사용함.
+# - "관리자"라는 이름을 쓴 이유: "회계사"라는 직무명을 그대로 쓰면, 향후 다른
+#   회계사가 추가로 이 시스템을 쓰게 될 때 "회계사=특정 한 사람"처럼 들려
+#   어색해질 수 있음. "관리자"는 권한 레벨을 가리키는 말이라 여러 명으로
+#   늘어나도 자연스러움 (실제로 관리자 역할을 쓰는 사람은 회계사임).
+# - 향후 고객 로그인을 추가할 때는 이 구조에 "customer" 역할을 한 단(段) 더
+#   추가하는 형태로 확장하면 됨 (개발계획서 8.6절 참고 — 고객 인증 방식은
+#   별도로 설계 필요, 공통 비밀번호 방식이 아니라 개인별 식별이 필요함).
+# ----------------------------------------------------------------------
+# 로그인 (관리자/직원 분리, 비밀번호는 구글시트 "계정설정" 탭에서 관리)
+# ----------------------------------------------------------------------
+# 설계 의도 (2026-06-27 변경 — 단일 공통 비밀번호에서 역할별 분리로 전환):
+# - 기존에는 APP_PASSWORD 1개로 누구나 동일하게 들어온 뒤, 사이드바의 "사용자
+#   구분" 라디오로 본인이 직접 "직원/회계사"를 선택했음. 이건 자기보고
+#   (self-report)일 뿐 실제 권한 분리가 아니었음 — 직원도 라디오에서 "회계사"를
+#   선택하면 관리자 기능(지식베이스 확정 저장)에 그대로 접근 가능했음.
+# - 변경: 비밀번호 자체를 관리자용/직원용으로 분리. 로그인 화면에서 입력한
+#   비밀번호 값으로 역할이 자동 결정되며, 이후 "역할을 직접 선택하는" 단계
+#   자체가 없음 — 그래서 사이드바의 "사용자 구분" 라디오는 제거함.
+# - 비밀번호 저장 위치 (2026-06-27 추가 변경 — .env/Secrets 대신 구글시트):
+#   PIN과 마찬가지로 평문이 아니라 sha256 해시만 구글시트 "계정설정" 탭에
+#   저장함(SheetLogger.set_account_password 등). .env(로컬)나 Streamlit
+#   Secrets(웹)에 미리 비밀번호를 적어둘 필요가 없어지고, 관리자가 로그인 후
+#   사이드바에서 언제든 두 비밀번호를 직접 변경할 수 있음.
+# - 최초 실행 시(계정설정 탭이 비어있는 경우): 로그인 화면 대신 "최초 계정
+#   설정" 화면을 띄워 그 자리에서 관리자/직원 비밀번호를 처음 만들게 함. 이
+#   화면은 인증 전 누구나 접근 가능한 상태이므로, 배포 직후 가능한 빨리
+#   설정을 완료하는 것을 전제로 함(의도적으로 약한 추가 보호장치를 두지 않음
+#   — 그것도 결국 별도 설정값이 필요해 ".env가 귀찮다"는 원래 문제를
+#   되살리기 때문).
+# - 구글시트 연동이 비활성 상태인 경우(.env/Secrets에 GOOGLE_SHEET_ID 등이
+#   없는 경우)에는 하위 호환을 위해 기존 ADMIN_PASSWORD/STAFF_PASSWORD(또는
+#   구버전 APP_PASSWORD) 환경변수 방식으로 자동 폴백함.
+# - 향후 고객 로그인을 추가할 때는 이 구조에 "customer" 역할을 한 단(段) 더
+#   추가하는 형태로 확장하면 됨 (개발계획서 8.6절 참고 — 고객 인증 방식은
+#   별도로 설계 필요, 공통 비밀번호 방식이 아니라 개인별 식별이 필요함).
+@st.cache_resource(show_spinner=False)
+def get_login_sheet_logger():
+    """
+    로그인 단계에서만 쓰는 가벼운 SheetLogger 인스턴스.
+    TaxAdvisorEngine은 로그인 통과 후에야 만들어지므로(엔진 초기화 자체가
+    무거운 작업이라 비인증 사용자에게는 실행하지 않으려는 의도), 로그인
+    체크 시점에는 이 별도 인스턴스로 "계정설정" 탭에 접근함. 이후
+    TaxAdvisorEngine 내부에서 한 번 더 SheetLogger를 만들지만, 둘 다
+    가벼운 클라이언트 객체일 뿐이라 중복 비용은 미미함.
+    """
+    return SheetLogger()
 
-    correct_password = os.getenv("APP_PASSWORD", "")
 
-    if not correct_password:
-        # APP_PASSWORD가 아예 설정되지 않은 경우: 로컬 테스트 등에서 막히지 않도록
-        # 안내만 띄우고 통과시킴. 단, 웹에 배포할 때는 반드시 설정해야 함.
-        st.warning(
-            "APP_PASSWORD가 설정되어 있지 않습니다. 로컬 환경에서는 그대로 진행되지만, "
-            "웹에 배포할 때는 .env(로컬) 또는 Streamlit Secrets(웹)에 APP_PASSWORD를 "
-            "반드시 설정해야 합니다."
+def render_first_time_account_setup(login_logger: SheetLogger):
+    """
+    '계정설정' 탭이 비어있을 때(앱을 처음 띄운 경우) 보여주는 화면.
+    관리자/직원 비밀번호를 그 자리에서 처음 만들게 함.
+    """
+    login_wrap = st.container(key="pf_login_wrap")
+    with login_wrap:
+        st.markdown(
+            '<div class="pf-login-panel">'
+            '<p class="pf-login-eyebrow">최초 설정</p>'
+            '<p class="pf-login-heading">관리자·직원 비밀번호를 만들어주세요</p>'
+            '<p class="pf-login-desc">아직 비밀번호가 설정되지 않았습니다.<br>'
+            '관리자(회계사)와 직원이 각각 사용할 비밀번호를 처음 만들어주세요.</p>'
+            '</div>',
+            unsafe_allow_html=True,
         )
-        return True
+
+        with st.form("first_time_setup_form"):
+            admin_pw = st.text_input("관리자(회계사) 비밀번호 (4자 이상)", type="password")
+            staff_pw = st.text_input("직원 비밀번호 (4자 이상)", type="password")
+            submitted = st.form_submit_button("설정 완료", type="primary")
+
+    if submitted:
+        if len(admin_pw.strip()) < 4 or len(staff_pw.strip()) < 4:
+            st.error("두 비밀번호 모두 4자 이상으로 설정해주세요.")
+        elif admin_pw.strip() == staff_pw.strip():
+            st.error("관리자와 직원 비밀번호는 서로 다르게 설정해주세요.")
+        else:
+            login_logger.set_account_password("admin", admin_pw)
+            login_logger.set_account_password("staff", staff_pw)
+            st.success("설정이 완료되었습니다. 이제 해당 비밀번호로 로그인해주세요.")
+            st.rerun()
+
+
+def check_app_password():
+    """
+    입력한 비밀번호가 관리자/직원 비밀번호 중 무엇과 일치하는지 확인.
+
+    Returns
+    -------
+    str | None
+        "admin" 또는 "staff" — 로그인 성공 시 역할 문자열.
+        아직 로그인 전이면 None (호출하는 쪽에서 st.stop()으로 이어감).
+    """
+    if st.session_state.get("app_role"):
+        return st.session_state.app_role
+
+    login_logger = get_login_sheet_logger()
+
+    if login_logger.enabled:
+        # 구글시트 기반 — "최초 계정 설정"이 아직 안 끝났으면 그 화면을 보여줌
+        if not login_logger.is_account_setup_done():
+            render_first_time_account_setup(login_logger)
+            return None
+
+        login_wrap = st.container(key="pf_login_wrap")
+        with login_wrap:
+            st.markdown(
+                '<div class="pf-login-panel">'
+                '<p class="pf-login-eyebrow">사내 로그인</p>'
+                '<p class="pf-login-heading">비밀번호를 입력해주세요</p>'
+                '<p class="pf-login-desc">포스원 회계법인 직원 전용 화면입니다.<br>'
+                '관리자(회계사) 또는 직원 비밀번호를 입력해주세요.</p>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+            with st.form("app_login_form"):
+                pw_input = st.text_input("비밀번호", type="password", label_visibility="collapsed")
+                submitted = st.form_submit_button("입장", type="primary")
+
+        if submitted:
+            if login_logger.verify_account_password("admin", pw_input):
+                st.session_state.app_role = "admin"
+                st.rerun()
+            elif login_logger.verify_account_password("staff", pw_input):
+                st.session_state.app_role = "staff"
+                st.rerun()
+            else:
+                st.error("비밀번호가 일치하지 않습니다.")
+
+        return None
+
+    # 구글시트 로깅이 비활성 상태인 경우: 하위 호환을 위해 환경변수 방식으로 폴백
+    admin_password = os.getenv("ADMIN_PASSWORD", "").strip() or os.getenv("APP_PASSWORD", "").strip()
+    staff_password = os.getenv("STAFF_PASSWORD", "").strip()
+
+    if not admin_password:
+        st.warning(
+            "구글시트 연동이 비활성 상태이고, ADMIN_PASSWORD(또는 기존 APP_PASSWORD)도 "
+            "설정되어 있지 않습니다. 로컬 환경에서는 관리자 권한으로 그대로 진행되지만, "
+            "웹에 배포할 때는 구글시트 연동을 설정하거나 .env/Secrets에 ADMIN_PASSWORD와 "
+            "STAFF_PASSWORD를 반드시 설정해야 합니다."
+        )
+        st.session_state.app_role = "admin"
+        return "admin"
 
     login_wrap = st.container(key="pf_login_wrap")
     with login_wrap:
@@ -365,7 +504,7 @@ def check_app_password() -> bool:
             '<p class="pf-login-eyebrow">사내 로그인</p>'
             '<p class="pf-login-heading">비밀번호를 입력해주세요</p>'
             '<p class="pf-login-desc">포스원 회계법인 직원 전용 화면입니다.<br>'
-            '사내 공통 비밀번호를 입력해주세요.</p>'
+            '관리자(회계사) 또는 직원 비밀번호를 입력해주세요.</p>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -375,17 +514,27 @@ def check_app_password() -> bool:
             submitted = st.form_submit_button("입장", type="primary")
 
     if submitted:
-        if pw_input == correct_password:
-            st.session_state.app_authenticated = True
+        if pw_input == admin_password:
+            st.session_state.app_role = "admin"
+            st.rerun()
+        elif staff_password and pw_input == staff_password:
+            st.session_state.app_role = "staff"
             st.rerun()
         else:
             st.error("비밀번호가 일치하지 않습니다.")
 
-    return False
+    return None
 
 
-if not check_app_password():
+app_role = check_app_password()
+if not app_role:
     st.stop()  # 비밀번호가 맞을 때까지 아래 모든 코드(엔진 초기화, 화면 등)를 실행하지 않음
+
+# 화면 곳곳에서 "지금 로그인한 사람이 관리자인지"를 간단히 체크하기 위한 변수.
+# 검색 기록 로깅 시 "사용자구분" 컬럼에도 이 값을 그대로 사용함(아래 사이드바
+# 섹션의 user_type 자리를 대체).
+is_admin = app_role == "admin"
+user_type = "회계사" if is_admin else "직원"
 
 
 # ----------------------------------------------------------------------
@@ -678,10 +827,11 @@ def show_log_dialog():
             )
 
     with col2:
-        render_confirm_to_kb_button(
-            question=question, answer=answer, key_prefix=dialog_key_base,
-            dialog_row_key="_dialog_log_row",
-        )
+        if is_admin:
+            render_confirm_to_kb_button(
+                question=question, answer=answer, key_prefix=dialog_key_base,
+                dialog_row_key="_dialog_log_row",
+            )
 
     with col3:
         # 검색 기록 삭제 — 되돌릴 수 없는 작업이므로 지식베이스 확정과 동일하게
@@ -805,97 +955,131 @@ with st.sidebar:
     st.write(f"국세청 검색 보강: {'사용 중' if nts_enabled else '미사용'}")
 
     st.divider()
-    st.subheader("사용자 구분")
-    user_type = st.radio(
-        "현재 사용자",
-        options=["직원", "회계사"],
-        horizontal=True,
-        help="검색 기록에 누가 질문했는지 표시하기 위한 구분입니다 (로그인 기능은 아닙니다)",
-    )
+    st.subheader("로그인 정보")
+    st.write(f"현재 역할: **{'관리자 (회계사)' if is_admin else '직원'}**")
+    if st.button("로그아웃", key="logout_btn"):
+        st.session_state.app_role = None
+        st.rerun()
 
-    st.divider()
-    st.subheader("확정 PIN 관리")
-    st.caption("AI 답변을 지식베이스에 확정 저장할 때 필요한 PIN입니다. 회계사만 알아야 합니다.")
+    if is_admin:
+        st.divider()
+        st.subheader("확정 PIN 관리")
+        st.caption("AI 답변을 지식베이스에 확정 저장할 때 필요한 PIN입니다. 회계사만 알아야 합니다.")
 
-    if not engine.has_pin_set():
-        st.info("아직 PIN이 설정되지 않았습니다.")
-        with st.form("set_pin_form", clear_on_submit=True):
-            new_pin = st.text_input("새 PIN 설정 (4자 이상)", type="password")
-            new_pin_confirm = st.text_input("PIN 확인", type="password")
-            if st.form_submit_button("PIN 설정"):
-                if len(new_pin.strip()) < 4:
-                    st.error("PIN은 4자 이상으로 설정해주세요.")
-                elif new_pin != new_pin_confirm:
-                    st.error("입력한 PIN이 서로 다릅니다.")
-                else:
-                    engine.set_pin(new_pin)
-                    st.success("PIN이 설정되었습니다.")
-                    st.rerun()
-    else:
-        with st.expander("PIN 변경", expanded=False):
-            with st.form("change_pin_form", clear_on_submit=True):
-                current_pin = st.text_input("현재 PIN", type="password")
-                new_pin = st.text_input("새 PIN (4자 이상)", type="password")
-                new_pin_confirm = st.text_input("새 PIN 확인", type="password")
-                if st.form_submit_button("PIN 변경"):
-                    if not engine.verify_pin(current_pin):
-                        st.error("현재 PIN이 일치하지 않습니다.")
-                    elif len(new_pin.strip()) < 4:
-                        st.error("새 PIN은 4자 이상으로 설정해주세요.")
+        if not engine.has_pin_set():
+            st.info("아직 PIN이 설정되지 않았습니다.")
+            with st.form("set_pin_form", clear_on_submit=True):
+                new_pin = st.text_input("새 PIN 설정 (4자 이상)", type="password")
+                new_pin_confirm = st.text_input("PIN 확인", type="password")
+                if st.form_submit_button("PIN 설정"):
+                    if len(new_pin.strip()) < 4:
+                        st.error("PIN은 4자 이상으로 설정해주세요.")
                     elif new_pin != new_pin_confirm:
-                        st.error("입력한 새 PIN이 서로 다릅니다.")
+                        st.error("입력한 PIN이 서로 다릅니다.")
                     else:
                         engine.set_pin(new_pin)
-                        st.success("PIN이 변경되었습니다.")
+                        st.success("PIN이 설정되었습니다.")
                         st.rerun()
+        else:
+            with st.expander("PIN 변경", expanded=False):
+                with st.form("change_pin_form", clear_on_submit=True):
+                    current_pin = st.text_input("현재 PIN", type="password")
+                    new_pin = st.text_input("새 PIN (4자 이상)", type="password")
+                    new_pin_confirm = st.text_input("새 PIN 확인", type="password")
+                    if st.form_submit_button("PIN 변경"):
+                        if not engine.verify_pin(current_pin):
+                            st.error("현재 PIN이 일치하지 않습니다.")
+                        elif len(new_pin.strip()) < 4:
+                            st.error("새 PIN은 4자 이상으로 설정해주세요.")
+                        elif new_pin != new_pin_confirm:
+                            st.error("입력한 새 PIN이 서로 다릅니다.")
+                        else:
+                            engine.set_pin(new_pin)
+                            st.success("PIN이 변경되었습니다.")
+                            st.rerun()
 
-    if st.button(
-        "지식 베이스 새로고침",
-        help="로컬 _knowledge 폴더 파일을 수정했거나, 다른 곳에서 확정 저장한 "
-        "구글시트 지식베이스 내용을 즉시 반영하고 싶을 때 누르세요.",
-    ):
-        engine.load_knowledge_base(force_reload=True)
-        st.success("지식 베이스를 다시 불러왔습니다.")
+        # ------------------------------------------------------------------
+        # 로그인 비밀번호 관리 (2026-06-27 추가)
+        # ------------------------------------------------------------------
+        # 관리자/직원 로그인 비밀번호를 .env/Secrets가 아니라 여기서 직접
+        # 변경할 수 있게 함(PIN 변경과 동일한 패턴 — 현재 비밀번호 확인 후 변경).
+        # 구글시트 연동이 비활성 상태면 이 기능 자체가 의미 없으므로(환경변수
+        # 방식으로 폴백 중이라는 뜻) 숨김.
+        if engine.sheet_logger and engine.sheet_logger.enabled:
+            with st.expander("로그인 비밀번호 관리", expanded=False):
+                st.caption("관리자/직원이 로그인할 때 쓰는 비밀번호입니다. 변경 시 즉시 적용됩니다.")
+                pw_role_label = st.radio(
+                    "변경할 대상", options=["관리자(회계사)", "직원"], horizontal=True, key="pw_change_role"
+                )
+                pw_role = "admin" if pw_role_label == "관리자(회계사)" else "staff"
+                with st.form("change_login_pw_form", clear_on_submit=True):
+                    current_admin_pw = st.text_input(
+                        "현재 관리자(회계사) 로그인 비밀번호",
+                        type="password",
+                        help="지식베이스 확정용 PIN이 아니라, 로그인 화면에서 입력하는 "
+                        "관리자 비밀번호입니다. 실수로 잘못 바꾸는 것을 막기 위한 본인 확인입니다.",
+                    )
+                    new_login_pw = st.text_input("새 비밀번호 (4자 이상)", type="password")
+                    new_login_pw_confirm = st.text_input("새 비밀번호 확인", type="password")
+                    if st.form_submit_button("비밀번호 변경"):
+                        if not engine.sheet_logger.verify_account_password("admin", current_admin_pw):
+                            st.error("현재 관리자(회계사) 비밀번호가 일치하지 않습니다.")
+                        elif len(new_login_pw.strip()) < 4:
+                            st.error("새 비밀번호는 4자 이상으로 설정해주세요.")
+                        elif new_login_pw != new_login_pw_confirm:
+                            st.error("입력한 새 비밀번호가 서로 다릅니다.")
+                        else:
+                            engine.sheet_logger.set_account_password(pw_role, new_login_pw)
+                            st.success(f"{pw_role_label} 비밀번호가 변경되었습니다.")
 
-    # ------------------------------------------------------------------
-    # 검증대기 불러오기 (2026-06-27 추가)
-    # ------------------------------------------------------------------
-    # 설계 의도: 화면이 튕겨서(WebSocket 연결 끊김 등) 검증까지 끝낸 작업을
-    # 잃어버렸을 때, 웹검색을 처음부터 다시 돌리지 않고 여기서 즉시 복원해
-    # PIN 입력 단계로 바로 이어갈 수 있게 함.
-    if engine.sheet_logger and engine.sheet_logger.enabled:
-        pending_list = engine.sheet_logger.list_pending_verifications()
-        if pending_list:
-            st.divider()
-            st.subheader("검증대기 불러오기")
-            st.caption(
-                f"화면이 튕겨도 잃지 않도록 자동 백업된 검증 결과입니다 "
-                f"({len(pending_list)}건). 불러오면 웹검색을 다시 돌리지 않고 "
-                f"PIN 입력 단계로 바로 이동합니다."
-            )
-            for p_row in pending_list:
-                p_ts = p_row.get("일시", "")
-                p_question = p_row.get("질문", "")
-                short_q = p_question[:30] + ("..." if len(p_question) > 30 else "")
-                if st.button(f"📋 {p_ts} — {short_q}", key=f"load_pending_{p_ts}".replace(" ", "_").replace(":", "")):
-                    restore_key_prefix = f"pending_{p_ts}".replace(" ", "_").replace(":", "").replace("-", "")
-                    st.session_state["kb_confirm_target"] = {
-                        "question": p_question,
-                        "answer": p_row.get("원본답변", ""),
-                        "key_prefix": restore_key_prefix,
-                    }
-                    st.session_state[f"{restore_key_prefix}_verification_result"] = {
-                        "verification_text": "(검증대기에서 복원됨 — 원래 검증 상세 내용은 표시되지 않습니다. "
-                        "수정된 최종본은 정상적으로 복원되었습니다.)",
-                        "corrected_content": p_row.get("수정된내용", ""),
-                        "correction_summary": p_row.get("수정요약", ""),
-                        "recommended_file": p_row.get("추천파일", ""),
-                        "recommended_reason": p_row.get("추천이유", ""),
-                    }
-                    st.session_state[f"{restore_key_prefix}_edited_content"] = p_row.get("수정된내용", "")
-                    st.session_state[f"{restore_key_prefix}_pending_ts"] = p_ts
-                    st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 진행해주세요.")
-                    st.rerun()
+        if st.button(
+            "지식 베이스 새로고침",
+            help="로컬 _knowledge 폴더 파일을 수정했거나, 다른 곳에서 확정 저장한 "
+            "구글시트 지식베이스 내용을 즉시 반영하고 싶을 때 누르세요.",
+        ):
+            engine.load_knowledge_base(force_reload=True)
+            st.success("지식 베이스를 다시 불러왔습니다.")
+
+        # ------------------------------------------------------------------
+        # 검증대기 불러오기 (2026-06-27 추가)
+        # ------------------------------------------------------------------
+        # 설계 의도: 화면이 튕겨서(WebSocket 연결 끊김 등) 검증까지 끝낸 작업을
+        # 잃어버렸을 때, 웹검색을 처음부터 다시 돌리지 않고 여기서 즉시 복원해
+        # PIN 입력 단계로 바로 이어갈 수 있게 함. PIN 관리·확정 저장과 같은
+        # 관리자 전용 흐름의 일부이므로 is_admin으로 같이 감쌈.
+        if engine.sheet_logger and engine.sheet_logger.enabled:
+            pending_list = engine.sheet_logger.list_pending_verifications()
+            if pending_list:
+                st.divider()
+                st.subheader("검증대기 불러오기")
+                st.caption(
+                    f"화면이 튕겨도 잃지 않도록 자동 백업된 검증 결과입니다 "
+                    f"({len(pending_list)}건). 불러오면 웹검색을 다시 돌리지 않고 "
+                    f"PIN 입력 단계로 바로 이동합니다."
+                )
+                for p_row in pending_list:
+                    p_ts = p_row.get("일시", "")
+                    p_question = p_row.get("질문", "")
+                    short_q = p_question[:30] + ("..." if len(p_question) > 30 else "")
+                    if st.button(f"📋 {p_ts} — {short_q}", key=f"load_pending_{p_ts}".replace(" ", "_").replace(":", "")):
+                        restore_key_prefix = f"pending_{p_ts}".replace(" ", "_").replace(":", "").replace("-", "")
+                        st.session_state["kb_confirm_target"] = {
+                            "question": p_question,
+                            "answer": p_row.get("원본답변", ""),
+                            "key_prefix": restore_key_prefix,
+                        }
+                        st.session_state[f"{restore_key_prefix}_verification_result"] = {
+                            "verification_text": "(검증대기에서 복원됨 — 원래 검증 상세 내용은 표시되지 않습니다. "
+                            "수정된 최종본은 정상적으로 복원되었습니다.)",
+                            "corrected_content": p_row.get("수정된내용", ""),
+                            "correction_summary": p_row.get("수정요약", ""),
+                            "recommended_file": p_row.get("추천파일", ""),
+                            "recommended_reason": p_row.get("추천이유", ""),
+                        }
+                        st.session_state[f"{restore_key_prefix}_edited_content"] = p_row.get("수정된내용", "")
+                        st.session_state[f"{restore_key_prefix}_pending_ts"] = p_ts
+                        st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 진행해주세요.")
+                        st.rerun()
 
     st.divider()
     st.subheader("검색 기록")
@@ -1285,9 +1469,10 @@ if st.session_state.current_thread:
                     st.session_state.current_thread.pop(real_idx)
                     st.rerun()
             with col3:
-                render_confirm_to_kb_button(
-                    question=qa["question"], answer=qa["answer"], key_prefix=f"cur_{qa_key}"
-                )
+                if is_admin:
+                    render_confirm_to_kb_button(
+                        question=qa["question"], answer=qa["answer"], key_prefix=f"cur_{qa_key}"
+                    )
 
     # ------------------------------------------------------------------
     # 전체 종합 (현재 묶음)
@@ -1406,4 +1591,9 @@ if st.session_state.backlog:
 # ----------------------------------------------------------------------
 # 어디서든(검색 기록, 현재 대화 카드 등) "지식베이스에 확정 저장" 버튼을 누르면
 # 여기에 작업 대상이 지정되고, 이 섹션에 검증/수정/저장 흐름이 펼쳐짐.
-render_confirm_to_kb_workspace()
+# is_admin으로 한 번 더 감싸는 이유: 위에서 버튼 자체를 직원에게는 안 보이게
+# 했지만(렌더링되는 곳들에서 if is_admin으로 막음), 혹시라도 세션에
+# kb_confirm_target이 남아있는 상태로 직원 계정으로 로그인하는 경우까지
+# 대비해 이 작업 공간 자체도 관리자가 아니면 절대 그려지지 않도록 이중으로 막음.
+if is_admin:
+    render_confirm_to_kb_workspace()

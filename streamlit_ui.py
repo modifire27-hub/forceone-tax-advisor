@@ -95,15 +95,19 @@ st.markdown(
         gap: 12px; margin-bottom: 0.3rem;
     }
     .pf-header-title {
-        font-size: 2.1rem; font-weight: 700; color: var(--pf-text-strong);
-        margin: 0; line-height: 1.3; letter-spacing: -0.01em;
+        font-size: 2.1rem !important; font-weight: 700 !important;
+        color: var(--pf-text-strong) !important;
+        margin: 0 !important; line-height: 1.3 !important;
+        letter-spacing: -0.01em !important;
     }
     .pf-header-caption {
-        color: var(--pf-text-muted); font-size: 0.95rem; margin: 0.2rem 0 0 0;
+        color: var(--pf-text-muted) !important; font-size: 0.95rem !important;
+        margin: 0.2rem 0 0 0 !important;
     }
     .pf-header-accent {
-        width: 44px; height: 3px; background-color: var(--pf-gold);
-        border-radius: 0; margin: 0.55rem 0 0.1rem;
+        width: 44px !important; height: 3px !important;
+        background-color: var(--pf-gold) !important;
+        border-radius: 0 !important; margin: 0.55rem 0 0.1rem !important;
     }
 
     /* 질의/답변 카드 ----------------------------------------------------- */
@@ -215,7 +219,7 @@ st.markdown(
        ------------------------------------------------------------------ */
     section[data-testid="stSidebar"] {
         background-color: var(--pf-navy) !important;
-        border-right: 3px solid var(--pf-gold) !important;
+        border-right: 2px solid var(--pf-gold) !important;
     }
     section[data-testid="stSidebar"] * {
         color: #ffffff !important;

@@ -74,20 +74,17 @@ st.markdown(
         --pf-sidebar-border: rgba(255, 255, 255, 0.15);
     }
 
-    /* Streamlit 기본 상단 헤더(Share/⭐/⋮ 등이 있는 띠)를 숨김.
-       이 헤더는 position: fixed로 콘텐츠 위에 떠 있어서, 이걸 숨기지
-       않으면 block-container의 padding-top이 그 높이를 못 따라가
-       제목(.pf-header-title) 상단부가 헤더 뒤로 가려져 잘려 보였음. */
-    header[data-testid="stHeader"] {
-        background: transparent !important;
-        height: 0 !important;
-        min-height: 0 !important;
-    }
-    header[data-testid="stHeader"] > * { display: none !important; }
-
-    /* 위 헤더 숨김에 맞춰, 제목이 화면 맨 위에 너무 붙지 않도록
-       block-container 자체 padding-top으로 여백을 확보 */
-    .block-container { max-width: 880px; padding-top: 2.8rem; }
+    /* 이전 시도에서 header[data-testid="stHeader"]의 자식 요소를 통째로
+       숨겼다가, Streamlit이 사이드바 펼치기/접기 토글 버튼도 같은 header
+       안에 두고 있어서 토글 버튼까지 같이 사라지는 부작용이 있었음
+       (사이드바 전체가 화면에서 안 보이게 됨).
+       Streamlit 내부 DOM 구조(메뉴 띠와 토글 버튼을 분리하는 정확한
+       선택자)는 버전마다 바뀔 수 있어 추측성 선택자로 다시 건드리는
+       대신, header는 절대 건드리지 않고 .block-container의 위쪽
+       여백만 넉넉하게 줘서 제목이 헤더 뒤로 가려지지 않게 함.
+       (헤더를 숨기지 않으므로 Share/⭐/⋮ 메뉴 띠는 그대로 보이지만,
+       사이드바 토글 버튼이 사라지는 부작용보다는 안전한 선택임) */
+    .block-container { max-width: 880px; padding-top: 3.5rem; }
 
     /* 페이지 타이틀 영역 ------------------------------------------------ */
     .pf-header-row {

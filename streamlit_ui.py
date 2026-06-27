@@ -269,13 +269,23 @@ st.markdown(
         color: #e8f0fb !important;
         border-radius: 4px !important;
     }
-    /* 사이드바 입력창/슬라이더/버튼 영역은 어두운 배경에 맞춰 대비 보정 */
+    /* 사이드바 입력창/슬라이더/버튼 영역은 어두운 배경에 맞춰 대비 보정
+       (이전에는 옅은 반투명 흰 배경 + 흰 글자라서, 배경이 거의 흰색으로
+       보이는데 그 위에 흰 글자/마스킹 점이 써져 거의 안 보이는 문제가
+       있었음 — 로그인 입력창과 동일한 원인. 배경을 또렷한 밝은 회백색,
+       글자색을 네이비로 바꿔 항상 대비가 보장되도록 수정) */
     section[data-testid="stSidebar"] input[type="text"],
     section[data-testid="stSidebar"] input[type="password"],
     section[data-testid="stSidebar"] textarea {
-        background-color: rgba(255, 255, 255, 0.08) !important;
+        background-color: #f3f5f8 !important;
         border-color: rgba(255, 255, 255, 0.25) !important;
-        color: #ffffff !important;
+        color: var(--pf-navy) !important;
+        caret-color: var(--pf-navy) !important;
+    }
+    section[data-testid="stSidebar"] input[type="text"]::placeholder,
+    section[data-testid="stSidebar"] input[type="password"]::placeholder,
+    section[data-testid="stSidebar"] textarea::placeholder {
+        color: #8a93a3 !important;
     }
     section[data-testid="stSidebar"] button {
         background-color: rgba(255, 255, 255, 0.08) !important;

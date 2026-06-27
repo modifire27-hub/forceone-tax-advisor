@@ -142,6 +142,24 @@ st.markdown(
     }
 
     /* ------------------------------------------------------------------
+       질의 입력 카드(question_form) - 좌측 골드 세로 바로 포인트
+       (로그인 카드의 상단 골드 줄과는 다른 패턴이지만, 같은 골드 색상을
+       사용해 디자인 언어는 통일시킴)
+       ------------------------------------------------------------------ */
+    .st-key-question_form div[data-testid="stForm"] {
+        border-left: 4px solid var(--pf-gold) !important;
+        border-radius: 0 12px 12px 0 !important;
+    }
+    /* "세무 질의를 입력하세요" 라벨 볼드 처리
+       (Streamlit이 라벨 텍스트를 <label> 바로 아래 두는 버전과, 그 안을
+       <p>로 한 번 더 감싸는 버전이 있어 양쪽 다 대응) */
+    .st-key-question_form div[data-testid="stForm"] label,
+    .st-key-question_form div[data-testid="stForm"] label p {
+        font-weight: 700 !important;
+        color: var(--pf-text-strong) !important;
+    }
+
+    /* ------------------------------------------------------------------
        로그인 패널 - 네이비 배경 (브라우저 호환성 문제 없는 순수 HTML 블록)
        st.container(key="pf_login_wrap")로 감싼 영역 안에서만 적용되도록
        .st-key-pf_login_wrap으로 범위를 한정함 (다른 st.form에 영향 없음).

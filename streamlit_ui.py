@@ -142,19 +142,19 @@ st.markdown(
     }
 
     /* ------------------------------------------------------------------
-       질의 입력 카드(question_form) - 좌측 골드 세로 바로 포인트
+       질의 입력 카드(question_form_wrap) - 좌측 골드 세로 바로 포인트
        (로그인 카드의 상단 골드 줄과는 다른 패턴이지만, 같은 골드 색상을
        사용해 디자인 언어는 통일시킴)
        ------------------------------------------------------------------ */
-    .st-key-question_form div[data-testid="stForm"] {
+    .st-key-question_form_wrap div[data-testid="stForm"] {
         border-left: 4px solid var(--pf-gold) !important;
         border-radius: 0 12px 12px 0 !important;
     }
     /* "세무 질의를 입력하세요" 라벨 볼드 처리
        (Streamlit이 라벨 텍스트를 <label> 바로 아래 두는 버전과, 그 안을
        <p>로 한 번 더 감싸는 버전이 있어 양쪽 다 대응) */
-    .st-key-question_form div[data-testid="stForm"] label,
-    .st-key-question_form div[data-testid="stForm"] label p {
+    .st-key-question_form_wrap div[data-testid="stForm"] label,
+    .st-key-question_form_wrap div[data-testid="stForm"] label p {
         font-weight: 700 !important;
         color: var(--pf-text-strong) !important;
     }
@@ -1092,14 +1092,24 @@ with top_col2:
 # ----------------------------------------------------------------------
 # 질문 입력
 # ----------------------------------------------------------------------
-with st.form("question_form", clear_on_submit=True):
-    placeholder_text = (
-        "꼬리질문을 입력하세요 (이전 대화를 참고하여 답변합니다)"
-        if st.session_state.current_thread
-        else "예: 약국에서 의약품을 도매가로 구입해서 소매가로 판매할 때 부가세 처리는?"
-    )
-    user_question = st.text_area("세무 질의를 입력하세요", height=100, placeholder=placeholder_text)
-    submitted = st.form_submit_button("조회", use_container_width=True)
+# 디자인 포인트(좌측 골드 바, 라벨 볼드 등)를 입히려면 CSS가 걸릴 클래스가
+# 필요한데, st.form()의 위치 인자("question_form")는 st-key- 클래스를
+# 만들어주는 key= 파라미터가 아니라서 CSS가 전혀 먹지 않는 문제가 있었음
+# (실제 배포 화면에서 개발자도구로 textarea의 class 목록을 확인해보니
+# st-key-question_form 클래스가 없었음 — 추측이 아니라 직접 확인된 사실).
+# 로그인 폼(app_login_form)에 디자인이 정상 적용됐던 건 st.form 자체가
+# 아니라, 그걸 감싼 st.container(key="pf_login_wrap") 덕분이었음.
+# 그래서 동일하게 st.container(key=...)로 한 번 감싸는 방식으로 변경.
+question_wrap = st.container(key="question_form_wrap")
+with question_wrap:
+    with st.form("question_form", clear_on_submit=True):
+        placeholder_text = (
+            "꼬리질문을 입력하세요 (이전 대화를 참고하여 답변합니다)"
+            if st.session_state.current_thread
+            else "예: 약국에서 의약품을 도매가로 구입해서 소매가로 판매할 때 부가세 처리는?"
+        )
+        user_question = st.text_area("세무 질의를 입력하세요", height=100, placeholder=placeholder_text)
+        submitted = st.form_submit_button("조회", use_container_width=True)
 
 if submitted:
     if not user_question.strip():

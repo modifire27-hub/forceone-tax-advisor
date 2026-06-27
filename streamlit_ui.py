@@ -194,9 +194,13 @@ st.markdown(
         box-shadow: 0 0 0 1px rgba(224, 176, 32, 0.3);
     }
     .st-key-pf_login_wrap div[data-testid="stForm"] input {
-        background-color: rgba(255, 255, 255, 0.1) !important;
+        background-color: #f3f5f8 !important;
         border-color: rgba(255, 255, 255, 0.3) !important;
-        color: #ffffff !important;
+        color: var(--pf-navy) !important;
+        caret-color: var(--pf-navy) !important;
+    }
+    .st-key-pf_login_wrap div[data-testid="stForm"] input::placeholder {
+        color: #8a93a3 !important;
     }
     .st-key-pf_login_wrap div[data-testid="stForm"] input:focus {
         box-shadow: 0 0 0 2px var(--pf-gold) !important;

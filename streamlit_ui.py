@@ -486,7 +486,20 @@ def render_confirm_to_kb_button(question: str, answer: str, key_prefix: str, dia
             st.session_state[dialog_row_key] = None
             st.rerun()
         else:
+            # 버그 수정 (2026-06-27 — "1차 답변 화면에서만 튕기는" 문제):
+            # 이 분기는 그동안 st.rerun()을 호출하지 않고 st.info()만 출력했음.
+            # st.button()이 True가 되는 순간 Streamlit이 이미 "이 실행이 끝나면
+            # 다시 그려라"를 예약해두는데, 그 사이 위에서 session_state를 여러 개
+            # 바꿔놓은 상태로(kb_confirm_target 설정, edited_content 제거 등)
+            # 이번 실행의 나머지 부분(같은 반복문의 다른 항목들, 그 아래 "전체
+            # 종합" 섹션 등)이 그대로 이어서 실행됨. 이 어중간한 상태로 나머지
+            # 스크립트가 끝까지 실행되다 예외가 나면 페이지가 초기 화면으로
+            # 튕기는 현상으로 이어질 수 있음(다이얼로그 경로는 st.rerun()을
+            # 명시적으로 호출해 이런 문제가 없었음 — 두 경로의 유일한 차이).
+            # 해결: 다이얼로그 경로와 동일하게 st.rerun()을 명시적으로 호출해,
+            # session_state 변경 직후 깨끗하게 다시 시작하도록 통일함.
             st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 진행해주세요.")
+            st.rerun()
 
 
 def render_confirm_to_kb_workspace():

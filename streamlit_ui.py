@@ -74,19 +74,36 @@ st.markdown(
         --pf-sidebar-border: rgba(255, 255, 255, 0.15);
     }
 
-    .block-container { max-width: 880px; padding-top: 2.2rem; }
+    /* Streamlit 기본 상단 헤더(Share/⭐/⋮ 등이 있는 띠)를 숨김.
+       이 헤더는 position: fixed로 콘텐츠 위에 떠 있어서, 이걸 숨기지
+       않으면 block-container의 padding-top이 그 높이를 못 따라가
+       제목(.pf-header-title) 상단부가 헤더 뒤로 가려져 잘려 보였음. */
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+        height: 0 !important;
+        min-height: 0 !important;
+    }
+    header[data-testid="stHeader"] > * { display: none !important; }
+
+    /* 위 헤더 숨김에 맞춰, 제목이 화면 맨 위에 너무 붙지 않도록
+       block-container 자체 padding-top으로 여백을 확보 */
+    .block-container { max-width: 880px; padding-top: 2.8rem; }
 
     /* 페이지 타이틀 영역 ------------------------------------------------ */
     .pf-header-row {
         display: flex; align-items: baseline; justify-content: space-between;
-        gap: 12px; margin-bottom: 0.2rem;
+        gap: 12px; margin-bottom: 0.3rem;
     }
     .pf-header-title {
-        font-size: 1.65rem; font-weight: 700; color: var(--pf-text-strong);
-        margin: 0; line-height: 1.25; letter-spacing: -0.01em;
+        font-size: 2.1rem; font-weight: 700; color: var(--pf-text-strong);
+        margin: 0; line-height: 1.3; letter-spacing: -0.01em;
     }
     .pf-header-caption {
-        color: var(--pf-text-muted); font-size: 0.92rem; margin: 0.1rem 0 0 0;
+        color: var(--pf-text-muted); font-size: 0.95rem; margin: 0.2rem 0 0 0;
+    }
+    .pf-header-accent {
+        width: 44px; height: 3px; background-color: var(--pf-gold);
+        border-radius: 0; margin: 0.55rem 0 0.1rem;
     }
 
     /* 질의/답변 카드 ----------------------------------------------------- */
@@ -133,13 +150,15 @@ st.markdown(
         border-radius: 12px 12px 0 0;
         padding: 1.75rem 2rem 1.5rem;
         max-width: 460px;
+        border-top: 4px solid var(--pf-gold);
+        box-shadow: 0 0 0 1px rgba(224, 176, 32, 0.3);
     }
     .pf-login-eyebrow {
         font-size: 0.82rem; font-weight: 600; color: #cfe0f3;
         letter-spacing: 0.02em; margin: 0 0 4px;
     }
     .pf-login-heading {
-        font-size: 1.2rem; font-weight: 600; color: #ffffff;
+        font-size: 1.2rem; font-weight: 600; color: var(--pf-gold);
         margin: 0 0 6px;
     }
     .pf-login-desc {
@@ -153,11 +172,16 @@ st.markdown(
         border: none !important;
         border-radius: 0 0 12px 12px;
         padding: 1.25rem 2rem 1.75rem !important;
+        box-shadow: 0 0 0 1px rgba(224, 176, 32, 0.3);
     }
     .st-key-pf_login_wrap div[data-testid="stForm"] input {
         background-color: rgba(255, 255, 255, 0.1) !important;
         border-color: rgba(255, 255, 255, 0.3) !important;
         color: #ffffff !important;
+    }
+    .st-key-pf_login_wrap div[data-testid="stForm"] input:focus {
+        box-shadow: 0 0 0 2px var(--pf-gold) !important;
+        border-color: var(--pf-gold) !important;
     }
     .st-key-pf_login_wrap button[kind="primaryFormSubmit"] {
         background-color: var(--pf-gold) !important;
@@ -191,6 +215,7 @@ st.markdown(
        ------------------------------------------------------------------ */
     section[data-testid="stSidebar"] {
         background-color: var(--pf-navy) !important;
+        border-right: 3px solid var(--pf-gold) !important;
     }
     section[data-testid="stSidebar"] * {
         color: #ffffff !important;
@@ -264,7 +289,8 @@ st.markdown(
 
 st.markdown(
     '<div class="pf-header-row"><p class="pf-header-title">포스원 세무 자문 AI 시스템</p></div>'
-    '<p class="pf-header-caption">기장 직원 / 회계사를 위한 세무질의 실시간 응답 도구</p>',
+    '<p class="pf-header-caption">기장 직원 / 회계사를 위한 세무질의 실시간 응답 도구</p>'
+    '<div class="pf-header-accent"></div>',
     unsafe_allow_html=True,
 )
 

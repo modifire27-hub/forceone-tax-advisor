@@ -70,6 +70,29 @@ class SheetLogger:
     PENDING_SHEET_NAME = "검증대기"
     PENDING_HEADER = ["일시", "질문", "원본답변", "수정된내용", "수정요약", "추천파일", "추천이유"]
 
+    # 교차검증대기 탭(워크시트) 이름 및 헤더
+    # 설계 의도 (2026-06-28 추가 — 교차검증 스레드 단계의 WebSocket 끊김 대비):
+    # - 위의 "검증대기" 탭은 ①②③ 자동검증+수정이 끝난 "확정 직전" 단계만
+    #   백업함. 그런데 v1.6에서 새로 추가된 교차검증 스레드(1차 검증 →
+    #   다른 AI에게 질문 → 답변 받아 재검증 → 2차, 3차... 반복)는 회계사가
+    #   다른 AI 사이트로 탭을 옮겨 한참 머무는 구간이 많아, 정작 WebSocket이
+    #   가장 자주 끊기는 지점인데도 백업이 전혀 없었음. 끊기면 진행 중이던
+    #   모든 라운드 기록이 그대로 사라지는 문제가 있었음(회계사 피드백 반영).
+    # - 해결: 매 라운드(재검증)가 끝날 때마다 그 라운드를 이 탭에 한 행씩
+    #   추가함. 같은 작업(같은 검증 스레드)에서 나온 라운드들은 동일한
+    #   세션ID로 묶여, 나중에 그 세션ID로 전체를 모아 복원할 수 있음.
+    # - "검증대기" 탭과 별도 탭으로 분리한 이유: 컬럼 구조가 다르고(이쪽은
+    #   라운드별로 여러 행), 기존에 이미 안정적으로 동작하는 "검증대기"
+    #   탭의 컬럼 구조를 건드리지 않기 위함.
+    # - 회계사가 "확정 단계로 진행"을 눌러 다음 단계로 넘어가거나, 확정
+    #   저장/취소가 완료되면 해당 세션ID의 모든 행을 정리함 — 이 탭도
+    #   "검증대기" 탭과 마찬가지로 "지금 진행 중인 작업"만 담는 임시 공간임.
+    CROSSCHECK_SHEET_NAME = "교차검증대기"
+    CROSSCHECK_HEADER = [
+        "세션ID", "일시", "라운드", "질문", "원본답변",
+        "검증결과", "보낸질문", "외부AI답변", "재검증후결과",
+    ]
+
     # 계정설정 탭(워크시트) 이름 및 헤더
     # 설계 의도 (2026-06-27 추가 — 비밀번호를 .env/Secrets가 아닌 화면에서 관리):
     # - 관리자(회계사)/직원 로그인 비밀번호를 처음에는 .env(로컬) 또는 Streamlit
@@ -111,6 +134,7 @@ class SheetLogger:
         self.summary_sheet = None
         self.knowledge_sheet = None
         self.pending_sheet = None
+        self.crosscheck_sheet = None
         self.account_sheet = None
         self.error_message = ""
 
@@ -187,6 +211,18 @@ class SheetLogger:
             existing_pending_header = self.pending_sheet.row_values(1)
             if existing_pending_header != self.PENDING_HEADER:
                 self.pending_sheet.insert_row(self.PENDING_HEADER, 1)
+
+            # 교차검증대기 탭 확인/생성 (없으면 새로 만듦)
+            try:
+                self.crosscheck_sheet = spreadsheet.worksheet(self.CROSSCHECK_SHEET_NAME)
+            except gspread.exceptions.WorksheetNotFound:
+                self.crosscheck_sheet = spreadsheet.add_worksheet(
+                    title=self.CROSSCHECK_SHEET_NAME, rows=50, cols=len(self.CROSSCHECK_HEADER)
+                )
+
+            existing_crosscheck_header = self.crosscheck_sheet.row_values(1)
+            if existing_crosscheck_header != self.CROSSCHECK_HEADER:
+                self.crosscheck_sheet.insert_row(self.CROSSCHECK_HEADER, 1)
 
             # 계정설정 탭 확인/생성 (없으면 새로 만듦)
             try:
@@ -579,6 +615,189 @@ class SheetLogger:
             return False
         except Exception as e:
             print(f"[경고] 검증대기 시트 행 삭제 실패: {e}")
+            return False
+
+    # ------------------------------------------------------------------
+    # 교차검증대기 (구글시트 기반) - 교차검증 스레드(1차/2차/3차...) 단계의
+    # WebSocket 끊김 대비 임시저장. "검증대기"와 똑같은 목적이지만, 컬럼
+    # 구조가 다르고(여러 라운드가 여러 행으로 쌓임) 대상 단계가 다름(②번
+    # 교차검증 단계 — 다른 AI 사이트로 탭을 옮겨 머무는 일이 많아 가장 자주
+    # 끊기는 구간).
+    # ------------------------------------------------------------------
+    def save_crosscheck_round(
+        self,
+        session_id: str,
+        round_no: int,
+        question: str,
+        original_answer: str,
+        verification_text: str,
+        cross_prompt: str,
+        external_ai_input: str,
+        next_verification_text: str = "",
+    ) -> bool:
+        """
+        교차검증 스레드의 한 라운드(예: 1차)가 완료될 때마다 호출해서, 그
+        라운드 내용을 '교차검증대기' 탭에 새 행으로 추가함.
+
+        같은 작업(같은 검증 스레드)에서 나온 라운드들은 모두 동일한
+        session_id를 가지므로, 나중에 get_crosscheck_rounds(session_id)로
+        한꺼번에 모아서 복원할 수 있음.
+
+        Parameters
+        ----------
+        session_id : str
+            이 검증 스레드를 식별하는 고유 ID. render_confirm_to_kb_button에서
+            "지식베이스에 확정 저장" 버튼을 누를 때 한 번 생성해서, 같은
+            작업의 모든 라운드에 동일하게 사용함.
+        round_no : int
+            이번에 완료된 라운드 번호 (1, 2, 3...)
+        question, original_answer : str
+            원래 질문과 검증 대상 원본 답변 (라운드마다 동일한 값 — 복원 시
+            첫 행에서만 읽어도 되지만, 행마다 같이 저장해 단순하게 둠)
+        verification_text : str
+            이 라운드가 "시작될 때" 보여줬던 검증 결과 텍스트 (즉 외부 AI에게
+            보낼 질문을 만드는 데 쓰인 텍스트)
+        cross_prompt : str
+            이 라운드에서 다른 AI에게 보냈던 질문 문구
+        external_ai_input : str
+            이 라운드에서 외부 AI로부터 받아온 답변
+        next_verification_text : str, optional
+            이 라운드의 외부 AI 답변까지 반영해 재검증한 "다음 결과" 텍스트.
+            버그 수정 (2026-06-28 — 교차검증대기 복원 시 다음 라운드를 다시
+            보여주지 못하던 문제): 이 값이 없으면, 복원했을 때 "지금 진행
+            중인 라운드"가 무엇을 보여줘야 할지 알 수 없어, 이미 끝난
+            라운드의 검증 결과를 다시 보여주는 부정확한 복원이 됨. 이 값을
+            함께 저장해두면, 복원 시 정확히 "재검증까지 끝난 최신 결과"부터
+            이어서 보여줄 수 있음.
+
+        Returns
+        -------
+        bool
+            성공 여부
+        """
+        if not self.enabled or self.crosscheck_sheet is None:
+            return False
+
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.crosscheck_sheet.append_row(
+                [
+                    session_id,
+                    timestamp,
+                    round_no,
+                    question,
+                    original_answer,
+                    verification_text,
+                    cross_prompt,
+                    external_ai_input,
+                    next_verification_text,
+                ],
+                value_input_option="RAW",
+            )
+            return True
+        except Exception as e:
+            print(f"[경고] 교차검증대기 시트 저장 실패: {e}")
+            return False
+
+    def list_crosscheck_sessions(self) -> list:
+        """
+        '교차검증대기' 탭에 남아있는 세션들의 요약 목록을 가져옴 (최신순,
+        세션당 1건 — 가장 최근 라운드 기준).
+        사이드바에 "진행 중인 교차검증 불러오기" 목록을 보여줄 때 사용.
+
+        Returns
+        -------
+        list[dict]
+            각 항목: {"session_id", "question", "latest_round", "updated_at"}
+            실패하거나 항목이 없으면 빈 리스트
+        """
+        if not self.enabled or self.crosscheck_sheet is None:
+            return []
+
+        try:
+            all_rows = self.crosscheck_sheet.get_all_records()
+            sessions = {}
+            for row in all_rows:
+                sid = row.get("세션ID", "")
+                if not sid:
+                    continue
+                # 같은 세션ID의 행 중 라운드 번호가 가장 큰(=가장 최근) 것만 대표로 남김
+                prev = sessions.get(sid)
+                if prev is None or int(row.get("라운드", 0) or 0) >= int(prev["latest_round"]):
+                    sessions[sid] = {
+                        "session_id": sid,
+                        "question": row.get("질문", ""),
+                        "latest_round": int(row.get("라운드", 0) or 0),
+                        "updated_at": row.get("일시", ""),
+                    }
+            return sorted(sessions.values(), key=lambda x: x["updated_at"], reverse=True)
+        except Exception as e:
+            print(f"[경고] 교차검증대기 세션 목록 조회 실패: {e}")
+            return []
+
+    def get_crosscheck_rounds(self, session_id: str) -> list:
+        """
+        특정 세션ID에 해당하는 모든 라운드 행을 라운드 순서대로 가져옴.
+        화면의 verification_thread 형태로 그대로 복원하기 위한 용도.
+
+        Returns
+        -------
+        list[dict]
+            각 항목: {"round", "question", "original_answer",
+                      "verification_text", "cross_prompt", "external_ai_input"}
+            실패하거나 항목이 없으면 빈 리스트
+        """
+        if not self.enabled or self.crosscheck_sheet is None:
+            return []
+
+        try:
+            all_rows = self.crosscheck_sheet.get_all_records()
+            rounds = [
+                {
+                    "round": int(row.get("라운드", 0) or 0),
+                    "question": row.get("질문", ""),
+                    "original_answer": row.get("원본답변", ""),
+                    "verification_text": row.get("검증결과", ""),
+                    "cross_prompt": row.get("보낸질문", ""),
+                    "external_ai_input": row.get("외부AI답변", ""),
+                    "next_verification_text": row.get("재검증후결과", ""),
+                }
+                for row in all_rows
+                if row.get("세션ID", "") == session_id
+            ]
+            rounds.sort(key=lambda r: r["round"])
+            return rounds
+        except Exception as e:
+            print(f"[경고] 교차검증대기 세션 조회 실패: {e}")
+            return []
+
+    def delete_crosscheck_session(self, session_id: str) -> bool:
+        """
+        특정 세션ID에 해당하는 모든 행을 '교차검증대기' 탭에서 삭제함.
+        회계사가 "확정 단계로 진행"을 누르거나, 확정 저장/취소가 완료되면
+        호출해서, 더 이상 필요 없는 임시저장 행들을 한꺼번에 정리함.
+
+        Returns
+        -------
+        bool
+            하나 이상 삭제했으면 True, 대상이 없거나 실패하면 False
+        """
+        if not self.enabled or self.crosscheck_sheet is None:
+            return False
+
+        try:
+            all_values = self.crosscheck_sheet.get_all_values()
+            # 뒤에서부터 삭제해야 앞쪽 행 삭제로 인한 인덱스 밀림이 안 생김
+            rows_to_delete = [
+                row_idx
+                for row_idx, row in enumerate(all_values[1:], start=2)
+                if len(row) >= 1 and row[0] == session_id
+            ]
+            for row_idx in reversed(rows_to_delete):
+                self.crosscheck_sheet.delete_rows(row_idx)
+            return len(rows_to_delete) > 0
+        except Exception as e:
+            print(f"[경고] 교차검증대기 세션 삭제 실패: {e}")
             return False
 
     # ------------------------------------------------------------------

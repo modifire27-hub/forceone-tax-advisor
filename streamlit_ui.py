@@ -26,6 +26,7 @@ Windows 환경 기준으로 작성됨.
 """
 
 import os
+import uuid
 from pathlib import Path
 from datetime import datetime
 
@@ -611,6 +612,9 @@ def render_confirm_to_kb_button(question: str, answer: str, key_prefix: str, dia
             "question": question,
             "answer": answer,
             "key_prefix": key_prefix,
+            # v1.6 추가 — 교차검증대기 구글시트 백업용 세션ID. 같은 작업에서
+            # 나온 모든 라운드(1차,2차...)가 이 ID로 묶여 저장/복원/삭제됨.
+            "crosscheck_session_id": str(uuid.uuid4()),
         }
         # 이전에 다른 항목을 검증/수정하던 상태가 남아있으면 깨끗하게 초기화
         #
@@ -693,6 +697,14 @@ def render_confirm_to_kb_workspace():
     question = target["question"]
     answer = target["answer"]
     key_prefix = target["key_prefix"]
+    # v1.6 추가 — 교차검증대기 백업용 세션ID. render_confirm_to_kb_button에서
+    # 만들어 넣어두지만, 혹시 그 경로를 거치지 않고 target이 만들어진 경우
+    # (예: 과거 버전과의 호환)를 대비해 없으면 여기서 즉석 생성함.
+    crosscheck_session_id = target.get("crosscheck_session_id")
+    if not crosscheck_session_id:
+        crosscheck_session_id = str(uuid.uuid4())
+        target["crosscheck_session_id"] = crosscheck_session_id
+        st.session_state["kb_confirm_target"] = target
 
     st.divider()
     st.header("지식베이스 확정 저장 작업 공간")
@@ -743,50 +755,66 @@ def render_confirm_to_kb_workspace():
 
     verification_thread = st.session_state.get(thread_key, [])
     latest_verification_text = st.session_state[latest_vtext_key]
+    current_round = len(verification_thread) + 1  # 지금 화면에 보여줄 "가장 최근" 라운드 번호
 
     st.markdown("### ② 검증 결과 및 교차검증")
-    if verification_thread:
-        st.caption(f"현재까지 {len(verification_thread)}회 교차검증 라운드가 진행되었습니다.")
-    with st.expander("검증 결과 원문 보기 (가장 최근 라운드)", expanded=True):
+    st.caption(
+        f"총 {current_round}차까지 진행되었습니다. 아래에 1차부터 순서대로 쌓여서 표시됩니다."
+        if verification_thread
+        else "1차 검증 결과입니다. 아래 질문을 복사해서 다른 AI에게 교차검증을 요청해보세요."
+    )
+
+    # 화면 재구성 (2026-06-28 — 회계사 피드백 반영, 두 번째 수정):
+    # 기존에는 "가장 최근 검증 결과 하나"와 "다른 AI에게 보낼 질문 하나"만
+    # 화면에 보이고, 이전 라운드는 별도 expander에 접혀 들어가 있어서,
+    # 1차 → 2차로 넘어갈 때 화면이 거의 그대로처럼 보여 "뭐가 바뀐 건지
+    # 모르겠다"는 혼란을 줬음.
+    # 변경: 지금까지의 모든 라운드(1차, 2차, 3차...)를 위에서부터 차례로
+    # 펼쳐서 보여줌. 각 라운드 블록에는 그 라운드의 검증 결과, 그 라운드용
+    # "다른 AI에게 보낼 질문", 그리고 (그 라운드가 아직 답변을 못 받은
+    # 가장 최신 라운드라면) 답변 붙여넣기 칸과 재검증 버튼이 함께 묶여 있음.
+    # 재검증을 누르면 새 라운드 블록이 그 아래에 새로 추가되고, 이전 라운드
+    # 블록들은 지워지지 않고 그대로 위에 남아있음 — 회계사가 스크롤해서
+    # 전체 진행 과정을 한눈에 다시 볼 수 있음.
+    for r in verification_thread:
+        st.divider()
+        st.markdown(f"#### 🔹 {r['round']}차")
+        with st.expander(f"{r['round']}차 검증 결과", expanded=False):
+            st.info(r["verification_text"])
+        with st.expander(f"{r['round']}차에 보냈던 질문", expanded=False):
+            st.code(r.get("cross_prompt", "(기록 없음)"), language="text")
+        st.markdown(f"**{r['round']}차 검증 후 외부 AI로부터 받은 답변**")
+        st.success(r.get("external_ai_input", "(없음)"))
+
+    # 가장 최근(아직 다음 라운드로 넘어가지 않은) 라운드 — 여기가 실제로
+    # 지금 회계사가 작업해야 하는 지점
+    st.divider()
+    st.markdown(f"#### 🔸 {current_round}차 (진행 중)")
+    with st.expander(f"{current_round}차 검증 결과", expanded=True):
         st.info(latest_verification_text)
 
-    # 이전 라운드 기록도 펼쳐서 볼 수 있게 함 (회계사가 진행 과정을 되짚어볼 수 있도록)
-    if verification_thread:
-        with st.expander(f"이전 라운드 기록 보기 ({len(verification_thread)}건)", expanded=False):
-            for r in verification_thread:
-                st.markdown(f"**{r['round']}차 검증 결과**")
-                st.write(r["verification_text"])
-                st.markdown(f"**{r['round']}차 검증 후 외부 AI 답변**")
-                st.write(r.get("external_ai_input", "(없음)"))
-                st.markdown("---")
-
     if not st.session_state.get(proceed_key):
-        # 화면 안내 개선 (2026-06-28 — 회계사 피드백 반영):
-        # "검증 결과를 보고 → 다른 AI에게 보낼 질문이 자동으로 이미 준비돼
-        # 있고 → 그걸 복사해서 다른 AI에 물어본 뒤 → 받아온 답변을 붙여넣고
-        # 재검증 → 그 결과로 다시 다음 질문이 자동으로 또 준비되는" 반복 흐름이
-        # 한눈에 보이도록, 번호를 매겨 순서를 명시적으로 안내함.
-        st.divider()
-        st.markdown("#### 2-1. 아래 질문을 복사해서 다른 AI(ChatGPT 등)에게 물어보세요")
-        if st.session_state.get(cross_prompt_key):
-            st.code(st.session_state[cross_prompt_key], language="text")
-        else:
+        st.markdown(f"**{current_round}차. 아래 질문을 복사해서 다른 AI(ChatGPT 등)에게 물어보세요**")
+        if not st.session_state.get(cross_prompt_key):
             # 통상적으로는 ①번 검증 직후 또는 재검증 직후 자동으로 채워지므로
             # 이 분기는 거의 보이지 않지만, 만약을 위한 수동 생성 버튼을 남겨둠.
-            if st.button("질문 다시 만들기", key=f"{key_prefix}_build_cross_prompt_btn"):
-                st.session_state[cross_prompt_key] = engine.build_cross_check_prompt(
-                    question, answer, latest_verification_text,
-                    verification_thread_history=verification_thread,
-                )
-                st.rerun()
+            st.session_state[cross_prompt_key] = engine.build_cross_check_prompt(
+                question, answer, latest_verification_text,
+                verification_thread_history=verification_thread,
+            )
+        st.code(st.session_state[cross_prompt_key], language="text")
 
-        st.markdown("#### 2-2. 다른 AI에게서 받은 답변을 아래에 붙여넣고 재검증하세요")
+        st.markdown(f"**{current_round}차. 다른 AI에게서 받은 답변을 아래에 붙여넣고 재검증하세요**")
         external_input = st.text_area(
             "다른 AI로부터 받은 답변을 여기에 붙여넣으세요",
             height=200,
-            key=f"{key_prefix}_external_ai_input_area",
+            key=f"{key_prefix}_external_ai_input_area_{current_round}",
         )
-        if st.button("이 답변을 반영해서 재검증하기", key=f"{key_prefix}_cross_verify_btn", type="primary"):
+        if st.button(
+            f"이 답변을 반영해서 {current_round + 1}차 재검증하기",
+            key=f"{key_prefix}_cross_verify_btn_{current_round}",
+            type="primary",
+        ):
             if not external_input.strip():
                 st.warning("붙여넣은 외부 AI 답변이 비어 있습니다.")
             else:
@@ -797,37 +825,55 @@ def render_confirm_to_kb_workspace():
                         verification_thread_history=verification_thread,
                         external_ai_input=external_input.strip(),
                     )
-                next_round = len(verification_thread) + 1
+                # 지금 라운드를 "완료된 라운드" 기록으로 thread에 추가함.
+                # cross_prompt도 같이 저장해두어, 위쪽 "이전 라운드" 표시에서
+                # 그 라운드가 실제로 어떤 질문을 보냈었는지 다시 볼 수 있게 함.
                 verification_thread.append({
-                    "round": next_round,
+                    "round": current_round,
                     "verification_text": latest_verification_text,
+                    "cross_prompt": st.session_state.get(cross_prompt_key, ""),
                     "external_ai_input": external_input.strip(),
                 })
                 st.session_state[thread_key] = verification_thread
                 st.session_state[latest_vtext_key] = new_verification_text
-                # 불편 개선 (2026-06-28 — 회계사 피드백 반영):
-                # 재검증이 끝나면 곧바로 "그 다음 라운드용 질문 문구"까지 자동
-                # 생성함. 기존에는 여기서 cross_prompt_key를 비우기만 해서,
-                # 회계사가 매 라운드마다 "질문 만들기" 버튼을 다시 눌러야
-                # 했음 — 이제는 한 번 더 교차검증을 이어가고 싶을 때 곧바로
-                # 다음 질문이 화면에 준비되어 있어, 검증→질문 생성→복사→
-                # 외부 AI 문의→붙여넣기→재검증의 반복이 끊김 없이 이어짐.
+
+                # 안전장치 (2026-06-28 추가 — 회계사 피드백 반영: 교차검증 단계
+                # WebSocket 끊김 대비 백업):
+                # 이 라운드가 막 완료된 시점에 곧바로 구글시트 "교차검증대기"
+                # 탭에 백업함. 다음 라운드를 위해 다시 다른 AI 사이트로 탭을
+                # 옮겼다가 돌아오는 사이에 연결이 끊겨도, 사이드바에서 이
+                # 세션ID로 지금까지의 모든 라운드를 그대로 복원할 수 있음.
+                if engine.sheet_logger and engine.sheet_logger.enabled:
+                    engine.sheet_logger.save_crosscheck_round(
+                        session_id=crosscheck_session_id,
+                        round_no=current_round,
+                        question=question,
+                        original_answer=answer,
+                        verification_text=latest_verification_text,
+                        cross_prompt=st.session_state.get(cross_prompt_key, ""),
+                        external_ai_input=external_input.strip(),
+                        next_verification_text=new_verification_text,
+                    )
+
+                # 다음 라운드(current_round + 1)용 질문을 곧바로 자동 생성함.
                 st.session_state[cross_prompt_key] = engine.build_cross_check_prompt(
                     question, answer, new_verification_text,
                     verification_thread_history=verification_thread,
                 )
                 st.rerun()
 
-        st.caption(
-            "위 2-1, 2-2 과정은 원하는 만큼 반복할 수 있습니다. 충분히 검증되었다면 "
-            "아래 버튼으로 다음 단계로 넘어가세요."
-        )
+        st.caption("위 과정은 원하는 만큼 반복할 수 있습니다. 충분히 검증되었다면 아래 버튼으로 다음 단계로 넘어가세요.")
         st.divider()
         if st.button(
             "확정 단계로 진행 (이 검증 결과로 자동 수정 진행) →",
             key=f"{key_prefix}_proceed_btn",
             type="primary",
         ):
+            # v1.6 추가 — 이 시점부터는 기존 "검증대기" 탭 백업(아래 확정
+            # 단계 로직)이 이어받으므로, 교차검증대기 탭에 쌓아둔 라운드
+            # 기록은 더 이상 필요 없음. 정리해서 임시 작업 공간을 비움.
+            if engine.sheet_logger and engine.sheet_logger.enabled:
+                engine.sheet_logger.delete_crosscheck_session(crosscheck_session_id)
             st.session_state[proceed_key] = True
             st.rerun()
         return
@@ -948,6 +994,12 @@ def render_confirm_to_kb_workspace():
                     engine.sheet_logger.delete_pending_verification(pending_ts)
                 st.session_state.pop(f"{key_prefix}_pending_ts", None)
 
+                # v1.6 추가 — "확정 단계로 진행" 시점에 이미 정리되는 게
+                # 정상이지만, 검증대기 복원처럼 그 경로를 거치지 않고 곧바로
+                # 여기까지 온 경우도 있어 한 번 더 안전하게 정리함.
+                if engine.sheet_logger and engine.sheet_logger.enabled:
+                    engine.sheet_logger.delete_crosscheck_session(crosscheck_session_id)
+
                 st.session_state["kb_confirm_target"] = None
                 st.session_state[verified_key] = None
                 st.session_state.pop(latest_vtext_key, None)
@@ -957,6 +1009,8 @@ def render_confirm_to_kb_workspace():
             else:
                 st.error("PIN이 일치하지 않습니다.")
         if cancelled:
+            if engine.sheet_logger and engine.sheet_logger.enabled:
+                engine.sheet_logger.delete_crosscheck_session(crosscheck_session_id)
             st.session_state["kb_confirm_target"] = None
             st.session_state[verified_key] = None
             st.session_state.pop(latest_vtext_key, None)
@@ -1263,6 +1317,77 @@ with st.sidebar:
                         st.session_state[f"{restore_key_prefix}_proceed_to_confirm"] = True
                         st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 진행해주세요.")
                         st.rerun()
+
+        # ------------------------------------------------------------------
+        # 교차검증대기 불러오기 (2026-06-28 추가)
+        # ------------------------------------------------------------------
+        # 설계 의도: 위의 "검증대기"는 ①②③ 자동검증+수정이 끝난 "확정 직전"
+        # 단계만 백업함. 이쪽은 그보다 앞선 "②번 교차검증 스레드"(1차 검증 →
+        # 다른 AI에게 질문 → 답변 받아 재검증 → 2차, 3차...) 도중에 화면이
+        # 튕긴 경우를 위한 것임. 회계사가 다른 AI 사이트로 탭을 옮겨 한참
+        # 머무는 구간이라 WebSocket이 가장 자주 끊기는 지점인데, 여기서
+        # 끊기면 진행하던 모든 라운드가 사라지던 문제를 막기 위함.
+        if engine.sheet_logger and engine.sheet_logger.enabled:
+            crosscheck_sessions = engine.sheet_logger.list_crosscheck_sessions()
+            if crosscheck_sessions:
+                st.divider()
+                st.subheader("교차검증 진행 중 항목 불러오기")
+                st.caption(
+                    f"다른 AI에게 교차검증을 요청하는 도중 화면이 튕겨도 잃지 않도록 "
+                    f"자동 백업된 진행 기록입니다 ({len(crosscheck_sessions)}건). 불러오면 "
+                    f"지금까지 진행했던 라운드 그대로 교차검증을 이어갈 수 있습니다."
+                )
+                for cc_session in crosscheck_sessions:
+                    cc_sid = cc_session["session_id"]
+                    cc_q = cc_session["question"]
+                    cc_short_q = cc_q[:30] + ("..." if len(cc_q) > 30 else "")
+                    cc_label = f"🔄 {cc_session['updated_at']} — {cc_short_q} ({cc_session['latest_round']}차까지 진행)"
+                    if st.button(cc_label, key=f"load_crosscheck_{cc_sid}"):
+                        cc_rounds = engine.sheet_logger.get_crosscheck_rounds(cc_sid)
+                        if not cc_rounds:
+                            st.warning("이 항목의 라운드 기록을 찾지 못했습니다.")
+                        else:
+                            restore_key_prefix = f"crosscheck_{cc_sid}".replace("-", "")
+                            original_answer = cc_rounds[0]["original_answer"]
+                            last_round = cc_rounds[-1]
+
+                            st.session_state["kb_confirm_target"] = {
+                                "question": cc_q,
+                                "answer": original_answer,
+                                "key_prefix": restore_key_prefix,
+                                # 기존 세션ID를 그대로 재사용함 — 새로 만들면
+                                # 이어서 백업되는 라운드가 다른 세션으로 갈라져
+                                # 기존 구글시트 기록과 끊어짐.
+                                "crosscheck_session_id": cc_sid,
+                            }
+                            # verification_thread는 "완료된 라운드" 기록 그대로 채움.
+                            st.session_state[f"{restore_key_prefix}_verification_thread"] = [
+                                {
+                                    "round": r["round"],
+                                    "verification_text": r["verification_text"],
+                                    "cross_prompt": r["cross_prompt"],
+                                    "external_ai_input": r["external_ai_input"],
+                                }
+                                for r in cc_rounds
+                            ]
+                            # 버그 수정 (2026-06-28): 마지막 라운드의
+                            # next_verification_text(=그 라운드의 외부 AI 답변을
+                            # 반영해 재검증까지 끝난 최신 결과)를 "지금 진행 중인
+                            # 다음 차수"의 검증 결과로 정확히 이어받음. 이게 없으면
+                            # 이미 끝난 라운드의 시작 시점 검증결과를 다시 보여주는
+                            # 부정확한 복원이 됨.
+                            resumed_vtext = (
+                                last_round.get("next_verification_text")
+                                or last_round["verification_text"]
+                            )
+                            st.session_state[f"{restore_key_prefix}_latest_vtext"] = resumed_vtext
+                            next_thread_history = st.session_state[f"{restore_key_prefix}_verification_thread"]
+                            st.session_state[f"{restore_key_prefix}_cross_prompt"] = engine.build_cross_check_prompt(
+                                cc_q, original_answer, resumed_vtext,
+                                verification_thread_history=next_thread_history,
+                            )
+                            st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 이어서 진행해주세요.")
+                            st.rerun()
 
     st.divider()
     st.subheader("검색 기록")

@@ -681,7 +681,7 @@ def render_confirm_to_kb_workspace():
       스레드는 항상 동일하게 동작함 — kb_confirm_target이 어디서 만들어졌는지
       (현재 대화 카드, 검색기록 다이얼로그, 검증대기 복원)와 무관하게, 여기서는
       question/answer만 보고 새 검증 스레드를 그 자리에서 구성함.
-    - 회계사가 "④ 확정 단계로 진행"을 누르면, 그 시점까지의 최종 검증 텍스트를
+    - 회계사가 "확정 단계로 진행" 버튼을 누르면, 그 시점까지의 최종 검증 텍스트를
       기존 verify_before_confirm에 precomputed_verification_text로 넘겨
       ②③ 단계(자동 수정, 파일 추천)를 그대로 재사용함 — 이 아래의 결과 확인/
       수정/파일선택/PIN 흐름 자체는 기존과 동일하게 유지됨.
@@ -724,6 +724,14 @@ def render_confirm_to_kb_workspace():
                 verification_text = engine.run_initial_verification(question, answer)
             st.session_state[latest_vtext_key] = verification_text
             st.session_state[thread_key] = []
+            # 버그/불편 개선 (2026-06-28 — 회계사 피드백 반영):
+            # 기존에는 검증이 끝나도 "다른 AI에게 보낼 질문"이 자동으로 만들어지지
+            # 않아서, 회계사가 매번 버튼을 한 번 더 눌러야만 질문 문구를 볼 수
+            # 있었음. 검증이 끝나는 즉시 질문 문구까지 한 번에 만들어서, 화면에
+            # "검증 결과 → 바로 복사할 질문"이 끊김 없이 한 흐름으로 이어지게 함.
+            st.session_state[cross_prompt_key] = engine.build_cross_check_prompt(
+                question, answer, verification_text, verification_thread_history=[]
+            )
             st.rerun()
         else:
             st.caption(
@@ -736,12 +744,9 @@ def render_confirm_to_kb_workspace():
     verification_thread = st.session_state.get(thread_key, [])
     latest_verification_text = st.session_state[latest_vtext_key]
 
-    st.markdown("### ② 검증 결과")
-    st.caption(
-        f"현재까지 {len(verification_thread)}회 교차검증 라운드가 진행되었습니다."
-        if verification_thread
-        else "1차 웹검색 검증 결과입니다. 필요하면 아래에서 다른 AI에게 교차검증을 요청할 수 있습니다."
-    )
+    st.markdown("### ② 검증 결과 및 교차검증")
+    if verification_thread:
+        st.caption(f"현재까지 {len(verification_thread)}회 교차검증 라운드가 진행되었습니다.")
     with st.expander("검증 결과 원문 보기 (가장 최근 라운드)", expanded=True):
         st.info(latest_verification_text)
 
@@ -756,31 +761,32 @@ def render_confirm_to_kb_workspace():
                 st.markdown("---")
 
     if not st.session_state.get(proceed_key):
-        st.markdown("#### 다른 AI에게 교차검증 요청하기 (선택)")
-        st.caption(
-            "아래 버튼으로 다른 AI(ChatGPT, Gemini 웹, Perplexity 등)에게 보낼 질문을 "
-            "자동으로 만들 수 있습니다. 그 답변을 받아오면 이 시스템에 다시 입력해 "
-            "한 번 더 검증할 수 있습니다. 이 단계는 몇 번이든 반복할 수 있고, "
-            "생략하고 바로 다음 단계로 진행해도 됩니다."
-        )
-
-        if st.button("다른 AI에게 보낼 질문 만들기", key=f"{key_prefix}_build_cross_prompt_btn"):
-            st.session_state[cross_prompt_key] = engine.build_cross_check_prompt(
-                question, answer, latest_verification_text
-            )
-            st.rerun()
-
+        # 화면 안내 개선 (2026-06-28 — 회계사 피드백 반영):
+        # "검증 결과를 보고 → 다른 AI에게 보낼 질문이 자동으로 이미 준비돼
+        # 있고 → 그걸 복사해서 다른 AI에 물어본 뒤 → 받아온 답변을 붙여넣고
+        # 재검증 → 그 결과로 다시 다음 질문이 자동으로 또 준비되는" 반복 흐름이
+        # 한눈에 보이도록, 번호를 매겨 순서를 명시적으로 안내함.
+        st.divider()
+        st.markdown("#### 2-1. 아래 질문을 복사해서 다른 AI(ChatGPT 등)에게 물어보세요")
         if st.session_state.get(cross_prompt_key):
-            st.caption("아래 내용을 복사해서 다른 AI에게 그대로 붙여넣으세요 (코드 상자 우측 상단 복사 아이콘 이용).")
             st.code(st.session_state[cross_prompt_key], language="text")
+        else:
+            # 통상적으로는 ①번 검증 직후 또는 재검증 직후 자동으로 채워지므로
+            # 이 분기는 거의 보이지 않지만, 만약을 위한 수동 생성 버튼을 남겨둠.
+            if st.button("질문 다시 만들기", key=f"{key_prefix}_build_cross_prompt_btn"):
+                st.session_state[cross_prompt_key] = engine.build_cross_check_prompt(
+                    question, answer, latest_verification_text,
+                    verification_thread_history=verification_thread,
+                )
+                st.rerun()
 
-        st.markdown("#### 외부 AI 답변 붙여넣고 재검증 요청")
+        st.markdown("#### 2-2. 다른 AI에게서 받은 답변을 아래에 붙여넣고 재검증하세요")
         external_input = st.text_area(
             "다른 AI로부터 받은 답변을 여기에 붙여넣으세요",
             height=200,
             key=f"{key_prefix}_external_ai_input_area",
         )
-        if st.button("이 답변을 반영해서 재검증하기", key=f"{key_prefix}_cross_verify_btn"):
+        if st.button("이 답변을 반영해서 재검증하기", key=f"{key_prefix}_cross_verify_btn", type="primary"):
             if not external_input.strip():
                 st.warning("붙여넣은 외부 AI 답변이 비어 있습니다.")
             else:
@@ -799,14 +805,26 @@ def render_confirm_to_kb_workspace():
                 })
                 st.session_state[thread_key] = verification_thread
                 st.session_state[latest_vtext_key] = new_verification_text
-                # 다음 라운드를 위해 직전 교차검증 질문 문구는 비워서, 새로
-                # 갱신된 검증 결과로 다시 만들 수 있게 함
-                st.session_state.pop(cross_prompt_key, None)
+                # 불편 개선 (2026-06-28 — 회계사 피드백 반영):
+                # 재검증이 끝나면 곧바로 "그 다음 라운드용 질문 문구"까지 자동
+                # 생성함. 기존에는 여기서 cross_prompt_key를 비우기만 해서,
+                # 회계사가 매 라운드마다 "질문 만들기" 버튼을 다시 눌러야
+                # 했음 — 이제는 한 번 더 교차검증을 이어가고 싶을 때 곧바로
+                # 다음 질문이 화면에 준비되어 있어, 검증→질문 생성→복사→
+                # 외부 AI 문의→붙여넣기→재검증의 반복이 끊김 없이 이어짐.
+                st.session_state[cross_prompt_key] = engine.build_cross_check_prompt(
+                    question, answer, new_verification_text,
+                    verification_thread_history=verification_thread,
+                )
                 st.rerun()
 
+        st.caption(
+            "위 2-1, 2-2 과정은 원하는 만큼 반복할 수 있습니다. 충분히 검증되었다면 "
+            "아래 버튼으로 다음 단계로 넘어가세요."
+        )
         st.divider()
         if st.button(
-            "④ 확정 단계로 진행 (이 검증 결과로 자동 수정 진행)",
+            "확정 단계로 진행 (이 검증 결과로 자동 수정 진행) →",
             key=f"{key_prefix}_proceed_btn",
             type="primary",
         ):

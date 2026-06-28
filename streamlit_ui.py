@@ -630,6 +630,15 @@ def render_confirm_to_kb_button(question: str, answer: str, key_prefix: str, dia
         st.session_state[f"{key_prefix}_verification_result"] = None
         st.session_state.pop(f"{key_prefix}_edited_content", None)
 
+        # v1.6 추가 — 교차검증 스레드 관련 상태도 새 대상 지정 시 깨끗하게 초기화.
+        # 신규 질문이든 검색기록에서 불러온 과거 질문이든, 이 버튼을 누르는
+        # 순간부터는 항상 "처음부터 새로 시작하는 검증 스레드"여야 함 — 이전에
+        # 다른 질문을 검증하다 만든 교차검증 기록이 섞여 들어가면 안 됨.
+        st.session_state.pop(f"{key_prefix}_latest_vtext", None)
+        st.session_state.pop(f"{key_prefix}_verification_thread", None)
+        st.session_state.pop(f"{key_prefix}_cross_prompt", None)
+        st.session_state.pop(f"{key_prefix}_proceed_to_confirm", None)
+
         if dialog_row_key:
             # 다이얼로그 안에서 호출된 경우: 다이얼로그를 닫고 메인 화면으로 이동
             st.session_state[dialog_row_key] = None
@@ -656,6 +665,26 @@ def render_confirm_to_kb_workspace():
     실제 검증 → 수정 → 저장 흐름이 펼쳐지는 전용 작업 공간.
     render_confirm_to_kb_button으로 대상이 지정된 경우에만 화면에 나타나며,
     메인 화면 맨 아래(화면 전체 너비)에 한 번만 그려짐.
+
+    구조 변경 (v1.6 — 2026-06-28, 교차검증 스레드 추가):
+    - 기존에는 "① 내용 검증하기" 버튼 한 번으로 웹검색→자동수정까지 한꺼번에
+      끝나고 곧바로 ② 결과 확인 단계로 넘어갔음. 이는 AI 단독 자기검증에
+      의존하는 "단일 기준" 구조라, 7.2.1절에서 확인된 한계(흔한 통념을 깨지
+      못하거나, 검증과 수정 사이에 자기모순이 생기는 문제)에 그대로 노출됨.
+    - 변경: ①번 버튼은 이제 "웹검색 결과만 보여주고 멈춤". 그 다음 회계사가
+      원하면 "다른 AI에게 보낼 질문"을 자동 생성해 복사하고, 외부 AI(ChatGPT
+      등)에게 교차검증을 요청한 뒤, 그 답변을 다시 시스템에 입력해 재검증을
+      반복할 수 있는 "검증 스레드" 단계가 새로 추가됨. 이 반복은 몇 번이든
+      가능하고, 1회만 검증하고 곧바로 다음 단계로 넘어가는 것도 그대로 가능함
+      (강제 아님).
+    - 신규 질문이든 검색기록(구글시트)에서 불러온 과거 질문이든, 이 검증
+      스레드는 항상 동일하게 동작함 — kb_confirm_target이 어디서 만들어졌는지
+      (현재 대화 카드, 검색기록 다이얼로그, 검증대기 복원)와 무관하게, 여기서는
+      question/answer만 보고 새 검증 스레드를 그 자리에서 구성함.
+    - 회계사가 "④ 확정 단계로 진행"을 누르면, 그 시점까지의 최종 검증 텍스트를
+      기존 verify_before_confirm에 precomputed_verification_text로 넘겨
+      ②③ 단계(자동 수정, 파일 추천)를 그대로 재사용함 — 이 아래의 결과 확인/
+      수정/파일선택/PIN 흐름 자체는 기존과 동일하게 유지됨.
     """
     target = st.session_state.get("kb_confirm_target")
     if not target:
@@ -680,46 +709,169 @@ def render_confirm_to_kb_workspace():
 
     verified_key = f"{key_prefix}_verification_result"
     edited_key = f"{key_prefix}_edited_content"
+    # 교차검증 스레드 전용 상태 키들 (v1.6 신규)
+    thread_key = f"{key_prefix}_verification_thread"  # list[dict] — 라운드별 기록
+    latest_vtext_key = f"{key_prefix}_latest_vtext"   # str — 가장 최근 검증 결과 텍스트
+    cross_prompt_key = f"{key_prefix}_cross_prompt"   # str — 생성된 교차검증 질문 문구
+    proceed_key = f"{key_prefix}_proceed_to_confirm"  # bool — "확정 단계로 진행" 눌렀는지
 
-    # 1단계: 자동 검증
-    if st.session_state.get(verified_key) is None:
-        if st.button("① 내용 검증하기 (웹검색)", key=f"{key_prefix}_run_verify_btn", type="primary"):
-            with st.spinner("답변 내용을 웹검색으로 재검증하는 중입니다..."):
-                st.session_state[verified_key] = engine.verify_before_confirm(question, answer)
-
-            # 안전장치 (2026-06-27 추가 — WebSocket 연결 끊김으로 인한 작업 손실 방지):
-            # Streamlit Cloud는 브라우저-서버 WebSocket 연결이 간헐적으로 끊기면
-            # session_state가 통째로 리셋되는 플랫폼 특성이 있음(코드 버그가 아니라
-            # Streamlit 자체의 알려진 동작 — GitHub streamlit/streamlit#4297,
-            # #8901 등에서 다수 보고됨). 검증이 끝난 직후 그 결과를 구글시트
-            # "검증대기" 탭에 즉시 백업해두면, 화면이 튕겨도(로그인부터 새로
-            # 시작해야 하는 상황이 되어도) 웹검색을 처음부터 다시 돌릴 필요 없이
-            # 사이드바에서 이 항목을 불러와 PIN 입력 단계로 곧바로 이어갈 수 있음.
-            if engine.sheet_logger and engine.sheet_logger.enabled:
-                verification_now = st.session_state[verified_key]
-                pending_ts = engine.sheet_logger.save_pending_verification(
-                    question=question,
-                    original_answer=answer,
-                    corrected_content=verification_now["corrected_content"],
-                    correction_summary=verification_now["correction_summary"],
-                    recommended_file=verification_now["recommended_file"],
-                    recommended_reason=verification_now["recommended_reason"],
-                )
-                if pending_ts:
-                    st.session_state[f"{key_prefix}_pending_ts"] = pending_ts
-
+    # ------------------------------------------------------------------
+    # 1단계: 웹검색 검증 (이제 여기서 멈춤 — 자동 수정으로 바로 안 이어짐)
+    # ------------------------------------------------------------------
+    if st.session_state.get(latest_vtext_key) is None:
+        if st.button("① 웹검색으로 검증하기", key=f"{key_prefix}_run_verify_btn", type="primary"):
+            with st.spinner("답변 내용을 웹검색으로 검증하는 중입니다..."):
+                verification_text = engine.run_initial_verification(question, answer)
+            st.session_state[latest_vtext_key] = verification_text
+            st.session_state[thread_key] = []
             st.rerun()
         else:
-            st.caption("저장 전에 먼저 내용을 검증해주세요. (검증 결과는 참고용이며, 최종 판단은 회계사가 직접 합니다.)")
+            st.caption(
+                "저장 전에 먼저 내용을 검증해주세요. 검증 후에는 다른 AI에게 교차검증을 "
+                "요청하고 그 결과를 반영해 재검증할 수도 있고, 한 번 검증한 뒤 곧바로 "
+                "확정 단계로 진행할 수도 있습니다."
+            )
             return
+
+    verification_thread = st.session_state.get(thread_key, [])
+    latest_verification_text = st.session_state[latest_vtext_key]
+
+    st.markdown("### ② 검증 결과")
+    st.caption(
+        f"현재까지 {len(verification_thread)}회 교차검증 라운드가 진행되었습니다."
+        if verification_thread
+        else "1차 웹검색 검증 결과입니다. 필요하면 아래에서 다른 AI에게 교차검증을 요청할 수 있습니다."
+    )
+    with st.expander("검증 결과 원문 보기 (가장 최근 라운드)", expanded=True):
+        st.info(latest_verification_text)
+
+    # 이전 라운드 기록도 펼쳐서 볼 수 있게 함 (회계사가 진행 과정을 되짚어볼 수 있도록)
+    if verification_thread:
+        with st.expander(f"이전 라운드 기록 보기 ({len(verification_thread)}건)", expanded=False):
+            for r in verification_thread:
+                st.markdown(f"**{r['round']}차 검증 결과**")
+                st.write(r["verification_text"])
+                st.markdown(f"**{r['round']}차 검증 후 외부 AI 답변**")
+                st.write(r.get("external_ai_input", "(없음)"))
+                st.markdown("---")
+
+    if not st.session_state.get(proceed_key):
+        st.markdown("#### 다른 AI에게 교차검증 요청하기 (선택)")
+        st.caption(
+            "아래 버튼으로 다른 AI(ChatGPT, Gemini 웹, Perplexity 등)에게 보낼 질문을 "
+            "자동으로 만들 수 있습니다. 그 답변을 받아오면 이 시스템에 다시 입력해 "
+            "한 번 더 검증할 수 있습니다. 이 단계는 몇 번이든 반복할 수 있고, "
+            "생략하고 바로 다음 단계로 진행해도 됩니다."
+        )
+
+        if st.button("다른 AI에게 보낼 질문 만들기", key=f"{key_prefix}_build_cross_prompt_btn"):
+            st.session_state[cross_prompt_key] = engine.build_cross_check_prompt(
+                question, answer, latest_verification_text
+            )
+            st.rerun()
+
+        if st.session_state.get(cross_prompt_key):
+            st.caption("아래 내용을 복사해서 다른 AI에게 그대로 붙여넣으세요 (코드 상자 우측 상단 복사 아이콘 이용).")
+            st.code(st.session_state[cross_prompt_key], language="text")
+
+        st.markdown("#### 외부 AI 답변 붙여넣고 재검증 요청")
+        external_input = st.text_area(
+            "다른 AI로부터 받은 답변을 여기에 붙여넣으세요",
+            height=200,
+            key=f"{key_prefix}_external_ai_input_area",
+        )
+        if st.button("이 답변을 반영해서 재검증하기", key=f"{key_prefix}_cross_verify_btn"):
+            if not external_input.strip():
+                st.warning("붙여넣은 외부 AI 답변이 비어 있습니다.")
+            else:
+                with st.spinner("외부 AI 답변을 반영해 웹검색으로 재검증하는 중입니다..."):
+                    new_verification_text = engine.run_cross_check_verification(
+                        question=question,
+                        content=answer,
+                        verification_thread_history=verification_thread,
+                        external_ai_input=external_input.strip(),
+                    )
+                next_round = len(verification_thread) + 1
+                verification_thread.append({
+                    "round": next_round,
+                    "verification_text": latest_verification_text,
+                    "external_ai_input": external_input.strip(),
+                })
+                st.session_state[thread_key] = verification_thread
+                st.session_state[latest_vtext_key] = new_verification_text
+                # 다음 라운드를 위해 직전 교차검증 질문 문구는 비워서, 새로
+                # 갱신된 검증 결과로 다시 만들 수 있게 함
+                st.session_state.pop(cross_prompt_key, None)
+                st.rerun()
+
+        st.divider()
+        if st.button(
+            "④ 확정 단계로 진행 (이 검증 결과로 자동 수정 진행)",
+            key=f"{key_prefix}_proceed_btn",
+            type="primary",
+        ):
+            st.session_state[proceed_key] = True
+            st.rerun()
+        return
+
+    # ------------------------------------------------------------------
+    # 확정 단계로 진행 — 여기서부터는 기존 verify_before_confirm을 그대로
+    # 재사용함 (precomputed_verification_text로 위에서 만든 최종 검증
+    # 텍스트를 넘겨, 웹검색을 다시 새로 하지 않고 ②③ 단계만 수행).
+    # ------------------------------------------------------------------
+    if st.session_state.get(verified_key) is None:
+        with st.spinner("검증 결과를 반영해 자동 수정본을 만드는 중입니다..."):
+            st.session_state[verified_key] = engine.verify_before_confirm(
+                question, answer, precomputed_verification_text=latest_verification_text
+            )
+
+        # 안전장치 (2026-06-27 추가 — WebSocket 연결 끊김으로 인한 작업 손실 방지):
+        # Streamlit Cloud는 브라우저-서버 WebSocket 연결이 간헐적으로 끊기면
+        # session_state가 통째로 리셋되는 플랫폼 특성이 있음(코드 버그가 아니라
+        # Streamlit 자체의 알려진 동작 — GitHub streamlit/streamlit#4297,
+        # #8901 등에서 다수 보고됨). 검증이 끝난 직후 그 결과를 구글시트
+        # "검증대기" 탭에 즉시 백업해두면, 화면이 튕겨도(로그인부터 새로
+        # 시작해야 하는 상황이 되어도) 웹검색을 처음부터 다시 돌릴 필요 없이
+        # 사이드바에서 이 항목을 불러와 PIN 입력 단계로 곧바로 이어갈 수 있음.
+        if engine.sheet_logger and engine.sheet_logger.enabled:
+            verification_now = st.session_state[verified_key]
+            pending_ts = engine.sheet_logger.save_pending_verification(
+                question=question,
+                original_answer=answer,
+                corrected_content=verification_now["corrected_content"],
+                correction_summary=verification_now["correction_summary"],
+                recommended_file=verification_now["recommended_file"],
+                recommended_reason=verification_now["recommended_reason"],
+            )
+            if pending_ts:
+                st.session_state[f"{key_prefix}_pending_ts"] = pending_ts
+
+        st.rerun()
 
     verification = st.session_state[verified_key]
 
-    st.markdown("### ② 검증 및 자동 수정 결과")
+    st.markdown("### ③ 검증 및 자동 수정 결과")
     st.markdown(f"**수정 사항**: {verification['correction_summary']}")
     with st.expander("검증 상세 내용 보기 (검색 근거 등)", expanded=False):
         st.info(verification["verification_text"])
     st.caption(f"추천 저장 파일: {verification['recommended_file']} — {verification['recommended_reason']}")
+
+    if st.button("↩ 검증 단계로 돌아가기 (추가로 교차검증하고 싶을 때)", key=f"{key_prefix}_back_to_verify_btn"):
+        # 버그 방지: 이 시점에 구글시트 "검증대기" 탭에 이미 백업된 행이 있다면
+        # (바로 위에서 자동 수정이 끝난 직후 save_pending_verification으로
+        # 만들어진 것) 먼저 정리함. 정리하지 않으면 회계사가 "돌아가기 → 추가
+        # 교차검증 → 다시 확정 단계로 진행"을 반복할 때마다 새 pending_ts가
+        # 계속 추가되어, 이미 끝난 이전 라운드의 백업 행이 구글시트에 중복으로
+        # 쌓이는 문제가 생김.
+        pending_ts = st.session_state.get(f"{key_prefix}_pending_ts")
+        if pending_ts and engine.sheet_logger and engine.sheet_logger.enabled:
+            engine.sheet_logger.delete_pending_verification(pending_ts)
+        st.session_state.pop(f"{key_prefix}_pending_ts", None)
+
+        st.session_state[proceed_key] = False
+        st.session_state[verified_key] = None
+        st.session_state.pop(edited_key, None)
+        st.rerun()
 
     # 2단계: 저장할 내용 확인/수정
     # 설계 의도 (2026-06-25 추가 — 검증 결과 자동 반영):
@@ -731,7 +883,7 @@ def render_confirm_to_kb_workspace():
     if edited_key not in st.session_state:
         st.session_state[edited_key] = verification["corrected_content"]
 
-    st.markdown("### ③ 저장할 내용 확인/수정")
+    st.markdown("### ④ 저장할 내용 확인/수정")
     st.caption("위 '수정 사항'이 이미 아래 내용에 반영되어 있습니다. 한번 훑어보고 필요하면 추가로 고쳐주세요.")
     st.session_state[edited_key] = st.text_area(
         "지식베이스에 저장될 최종 내용",
@@ -747,7 +899,7 @@ def render_confirm_to_kb_workspace():
         else 0
     )
     target_file = st.selectbox(
-        "④ 저장할 지식베이스 파일",
+        "⑤ 저장할 지식베이스 파일",
         options=engine.KNOWLEDGE_FILE_OPTIONS,
         index=default_idx,
         key=f"{key_prefix}_target_file_select",
@@ -755,7 +907,7 @@ def render_confirm_to_kb_workspace():
 
     # 4단계: PIN 입력 후 최종 저장
     with st.form(f"{key_prefix}_final_confirm_form"):
-        pin_input = st.text_input("⑤ 회계사 확정 PIN", type="password", key=f"{key_prefix}_final_pin_input")
+        pin_input = st.text_input("⑥ 회계사 확정 PIN", type="password", key=f"{key_prefix}_final_pin_input")
         col_a, col_b = st.columns([1, 1])
         with col_a:
             submitted = st.form_submit_button("확정 저장 실행", type="primary", use_container_width=True)
@@ -780,11 +932,19 @@ def render_confirm_to_kb_workspace():
 
                 st.session_state["kb_confirm_target"] = None
                 st.session_state[verified_key] = None
+                st.session_state.pop(latest_vtext_key, None)
+                st.session_state.pop(thread_key, None)
+                st.session_state.pop(cross_prompt_key, None)
+                st.session_state.pop(proceed_key, None)
             else:
                 st.error("PIN이 일치하지 않습니다.")
         if cancelled:
             st.session_state["kb_confirm_target"] = None
             st.session_state[verified_key] = None
+            st.session_state.pop(latest_vtext_key, None)
+            st.session_state.pop(thread_key, None)
+            st.session_state.pop(cross_prompt_key, None)
+            st.session_state.pop(proceed_key, None)
             st.rerun()
 
 
@@ -1078,6 +1238,11 @@ with st.sidebar:
                         }
                         st.session_state[f"{restore_key_prefix}_edited_content"] = p_row.get("수정된내용", "")
                         st.session_state[f"{restore_key_prefix}_pending_ts"] = p_ts
+                        # v1.6 추가 — 검증대기 복원은 이미 검증+자동수정이 끝난
+                        # 결과를 그대로 가져오는 것이므로, 새로 추가된 교차검증
+                        # 스레드 단계(①②)를 다시 거치지 않고 곧바로 ③ 결과
+                        # 확인 단계로 건너뛰게 함.
+                        st.session_state[f"{restore_key_prefix}_proceed_to_confirm"] = True
                         st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 진행해주세요.")
                         st.rerun()
 

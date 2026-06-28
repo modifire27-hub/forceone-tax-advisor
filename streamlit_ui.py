@@ -724,11 +724,24 @@ def render_confirm_to_kb_workspace():
         if st.button("① 웹검색으로 검증하고 1차 확정 문서 만들기", key=f"{key_prefix}_run_verify_btn", type="primary"):
             with st.spinner("답변 내용을 웹검색으로 검증하고 자동 수정본을 만드는 중입니다..."):
                 verification = engine.verify_before_confirm(question, answer)
+
+            # 회계사 피드백 반영 (2026-06-28): verify_before_confirm이 만드는
+            # correction_summary는 항목별 짧은 사유를 이어붙인 것이라, "원본과
+            # 1차 문서를 놓고 비교했을 때 결과적으로 무엇이 달라졌는지"를
+            # 한눈에 보여주지 못함. 원본 답변과 1차 확정 문서를 직접 비교해서
+            # 자세한 변경 요약을 새로 만듦 — 2라운드부터 쓰는
+            # apply_external_feedback의 change_summary와 동등한 수준의
+            # 비교 정보를 1라운드에도 제공하기 위함.
+            with st.spinner("원본과 1차 확정 문서를 비교하는 중입니다..."):
+                comparison_summary = engine.summarize_document_changes(
+                    answer, verification["corrected_content"]
+                )
+
             st.session_state[current_doc_key] = verification["corrected_content"]
             st.session_state[rounds_key] = [{
                 "round": 1,
                 "document": verification["corrected_content"],
-                "change_summary": verification["correction_summary"],
+                "change_summary": comparison_summary,
                 "verification_detail": verification["verification_text"],
                 "next_prompt": "",  # 아래에서 채움
                 "external_ai_input": "",  # 다음 라운드에서 답변 오면 채움
@@ -738,7 +751,7 @@ def render_confirm_to_kb_workspace():
             st.session_state[f"{key_prefix}_recommended_reason"] = verification["recommended_reason"]
 
             next_prompt = engine.build_next_round_prompt(
-                question, verification["corrected_content"], verification["correction_summary"]
+                question, verification["corrected_content"], comparison_summary
             )
             st.session_state[next_prompt_key] = next_prompt
             st.session_state[rounds_key][0]["next_prompt"] = next_prompt
@@ -750,7 +763,7 @@ def render_confirm_to_kb_workspace():
                     round_no=1,
                     question=question,
                     original_answer=answer,
-                    verification_text=verification["correction_summary"],
+                    verification_text=comparison_summary,
                     cross_prompt=next_prompt,
                     external_ai_input="",
                     next_verification_text=verification["corrected_content"],

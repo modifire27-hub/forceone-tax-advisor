@@ -19,6 +19,19 @@ import time
 from pathlib import Path
 from datetime import datetime
 
+# 배포 환경(Streamlit Cloud 등)에서 print() 로그가 Logs 화면에 실시간으로
+# 안 보이는 문제 수정 (2026-07-02):
+# 파이썬의 print()는 표준출력이 터미널에 직접 연결되어 있을 때는 한 줄씩
+# 바로바로 출력(line buffering)되지만, Streamlit Cloud처럼 앱 프로세스의
+# 출력을 파이프로 받아 로그로 모으는 환경에서는 기본적으로 "블록 단위"로
+# 버퍼링됨. 이 앱은 종료되지 않고 계속 떠있는 서버라, 버퍼가 다 찰 때까지
+# print()로 남긴 안내/경고 메시지([안내] 꼬리질문 판단, [안내] 국세청 법령해석
+# 검색 등)가 Logs 화면에 전혀 나타나지 않는 현상으로 이어짐(코드가 안 도는
+# 게 아니라, 로그만 화면에 안 보이는 것). sys.stdout을 줄 단위 버퍼링으로
+# 강제 재설정해, print() 직후 곧바로 로그에 반영되도록 함.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
 try:
     from google import genai
     from google.genai import types as genai_types

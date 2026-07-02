@@ -266,8 +266,9 @@ def _find_korean_font() -> str:
 
     우선순위:
     ① 이 파일(doc_export.py)과 함께 저장소에 커밋해 둔 번들 폰트
-       (assets/fonts/NanumGothic-Regular.ttf) — 로컬/웹 배포 환경과
-       무관하게 항상 존재하므로 가장 먼저 확인함. 웹 배포 환경
+       — assets/fonts/NanumGothic-Regular.ttf 에 있어도, doc_export.py와
+       같은 폴더(저장소 루트)에 바로 있어도 둘 다 찾음. 로컬/웹 배포
+       환경과 무관하게 항상 존재하므로 가장 먼저 확인함. 웹 배포 환경
        (Streamlit Cloud 기본 이미지)에는 애초에 한글 폰트가 설치되어
        있지 않아 PDF 생성이 항상 실패했는데, 폰트 파일 자체를 저장소에
        포함시켜 이 문제를 근본적으로 해결함(서버에 폰트를 설치할 권한이
@@ -282,9 +283,10 @@ def _find_korean_font() -> str:
 
     찾지 못하면 빈 문자열 반환 (이 경우 PDF 생성은 건너뛰고 md/docx로 안내).
     """
-    bundled_font = Path(__file__).resolve().parent / "assets" / "fonts" / "NanumGothic-Regular.ttf"
+    module_dir = Path(__file__).resolve().parent
     candidates = [
-        str(bundled_font),                    # ① 저장소에 함께 커밋된 폰트 (최우선)
+        str(module_dir / "assets" / "fonts" / "NanumGothic-Regular.ttf"),  # ①-1 assets/fonts/ 폴더
+        str(module_dir / "NanumGothic-Regular.ttf"),                       # ①-2 저장소 루트(doc_export.py와 같은 위치)
         r"C:\Windows\Fonts\malgun.ttf",       # ② 맑은 고딕 (로컬 PC)
         r"C:\Windows\Fonts\malgunbd.ttf",     # 맑은 고딕 Bold
         # ③ Linux (Streamlit Cloud 등 웹 서버 — 나눔고딕이 시스템에 별도 설치된 경우)
@@ -325,9 +327,9 @@ def build_pdf_bytes(title: str, question: str, response_md: str) -> bytes:
     if not font_path:
         raise RuntimeError(
             "한글 폰트를 찾을 수 없어 PDF를 생성할 수 없습니다.\n"
-            "가장 확실한 해결책: 이 저장소의 doc_export.py와 같은 폴더에 "
-            "assets/fonts/NanumGothic-Regular.ttf 파일을 커밋해두면, 로컬/웹 "
-            "환경 어디서든 이 폰트가 자동으로 사용됩니다.\n"
+            "가장 확실한 해결책: NanumGothic-Regular.ttf 파일을 이 저장소의 "
+            "doc_export.py와 같은 폴더(루트) 또는 assets/fonts/ 폴더 안에 "
+            "커밋해두면, 로컬/웹 환경 어디서든 이 폰트가 자동으로 사용됩니다.\n"
             "(참고) 로컬 PC: Windows 폰트 폴더(C:\\Windows\\Fonts)에 malgun.ttf가 있는지 확인하세요.\n"
             "위 방법이 모두 안 되면 대신 Word(.docx) 또는 마크다운(.md) 형식으로 받아주세요."
         )

@@ -1372,33 +1372,58 @@ with st.sidebar:
                     p_ts = p_row.get("일시", "")
                     p_question = p_row.get("질문", "")
                     short_q = p_question[:30] + ("..." if len(p_question) > 30 else "")
-                    if st.button(f"📋 {p_ts} — {short_q}", key=f"load_pending_{p_ts}".replace(" ", "_").replace(":", "")):
-                        restore_key_prefix = f"pending_{p_ts}".replace(" ", "_").replace(":", "").replace("-", "")
-                        st.session_state["kb_confirm_target"] = {
-                            "question": p_question,
-                            "answer": p_row.get("원본답변", ""),
-                            "key_prefix": restore_key_prefix,
-                        }
-                        # v1.7 — 검증대기 복원은 이미 검증+자동수정이 끝난 결과를
-                        # 그대로 가져오는 것이므로, "1라운드" 기록으로 채워두고
-                        # 곧바로 ③ 결과 확인 단계로 건너뛰게 함.
-                        restored_doc = p_row.get("수정된내용", "")
-                        st.session_state[f"{restore_key_prefix}_current_doc"] = restored_doc
-                        st.session_state[f"{restore_key_prefix}_doc_rounds"] = [{
-                            "round": 1,
-                            "document": restored_doc,
-                            "change_summary": p_row.get("수정요약", ""),
-                            "verification_detail": "(검증대기에서 복원됨 — 원래 검증 상세 내용은 표시되지 않습니다.)",
-                            "next_prompt": "",
-                            "external_ai_input": "",
-                        }]
-                        st.session_state[f"{restore_key_prefix}_recommended_file"] = p_row.get("추천파일", "")
-                        st.session_state[f"{restore_key_prefix}_recommended_reason"] = p_row.get("추천이유", "")
-                        st.session_state[f"{restore_key_prefix}_edited_content"] = restored_doc
-                        st.session_state[f"{restore_key_prefix}_pending_ts"] = p_ts
-                        st.session_state[f"{restore_key_prefix}_proceed_to_confirm"] = True
-                        st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 진행해주세요.")
-                        st.rerun()
+                    p_key_base = f"pending_{p_ts}".replace(" ", "_").replace(":", "").replace("-", "")
+
+                    col_load, col_del = st.columns([5, 1])
+                    with col_load:
+                        if st.button(f"📋 {p_ts} — {short_q}", key=f"load_{p_key_base}", use_container_width=True):
+                            restore_key_prefix = p_key_base
+                            st.session_state["kb_confirm_target"] = {
+                                "question": p_question,
+                                "answer": p_row.get("원본답변", ""),
+                                "key_prefix": restore_key_prefix,
+                            }
+                            # v1.7 — 검증대기 복원은 이미 검증+자동수정이 끝난 결과를
+                            # 그대로 가져오는 것이므로, "1라운드" 기록으로 채워두고
+                            # 곧바로 ③ 결과 확인 단계로 건너뛰게 함.
+                            restored_doc = p_row.get("수정된내용", "")
+                            st.session_state[f"{restore_key_prefix}_current_doc"] = restored_doc
+                            st.session_state[f"{restore_key_prefix}_doc_rounds"] = [{
+                                "round": 1,
+                                "document": restored_doc,
+                                "change_summary": p_row.get("수정요약", ""),
+                                "verification_detail": "(검증대기에서 복원됨 — 원래 검증 상세 내용은 표시되지 않습니다.)",
+                                "next_prompt": "",
+                                "external_ai_input": "",
+                            }]
+                            st.session_state[f"{restore_key_prefix}_recommended_file"] = p_row.get("추천파일", "")
+                            st.session_state[f"{restore_key_prefix}_recommended_reason"] = p_row.get("추천이유", "")
+                            st.session_state[f"{restore_key_prefix}_edited_content"] = restored_doc
+                            st.session_state[f"{restore_key_prefix}_pending_ts"] = p_ts
+                            st.session_state[f"{restore_key_prefix}_proceed_to_confirm"] = True
+                            st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 진행해주세요.")
+                            st.rerun()
+
+                    # 삭제 — 오래돼서 더 진행할 필요 없는 항목을 구글시트에
+                    # 직접 들어가지 않고도 여기서 바로 정리할 수 있게 함
+                    # (2026-07-02 추가). 실수로 한 번에 지워지지 않도록 클릭
+                    # 시 확인 버튼을 한 번 더 거치는 2단계 확인 방식 사용.
+                    del_confirm_key = f"del_confirm_{p_key_base}"
+                    with col_del:
+                        if st.button("🗑", key=f"del_{p_key_base}", help="이 검증대기 항목 삭제"):
+                            st.session_state[del_confirm_key] = True
+                    if st.session_state.get(del_confirm_key):
+                        st.caption(f"'{short_q}' 항목을 삭제할까요? 되돌릴 수 없습니다.")
+                        c_yes, c_no = st.columns(2)
+                        with c_yes:
+                            if st.button("삭제 확정", key=f"del_yes_{p_key_base}", use_container_width=True):
+                                engine.sheet_logger.delete_pending_verification(p_ts)
+                                st.session_state[del_confirm_key] = False
+                                st.rerun()
+                        with c_no:
+                            if st.button("취소", key=f"del_no_{p_key_base}", use_container_width=True):
+                                st.session_state[del_confirm_key] = False
+                                st.rerun()
 
         # ------------------------------------------------------------------
         # 교차검증대기 불러오기 (2026-06-28 추가)
@@ -1424,50 +1449,72 @@ with st.sidebar:
                     cc_q = cc_session["question"]
                     cc_short_q = cc_q[:30] + ("..." if len(cc_q) > 30 else "")
                     cc_label = f"🔄 {cc_session['updated_at']} — {cc_short_q} ({cc_session['latest_round']}차까지 진행)"
-                    if st.button(cc_label, key=f"load_crosscheck_{cc_sid}"):
-                        cc_rounds = engine.sheet_logger.get_crosscheck_rounds(cc_sid)
-                        if not cc_rounds:
-                            st.warning("이 항목의 라운드 기록을 찾지 못했습니다.")
-                        else:
-                            restore_key_prefix = f"crosscheck_{cc_sid}".replace("-", "")
-                            original_answer = cc_rounds[0]["original_answer"]
-                            last_round = cc_rounds[-1]
+                    cc_key_base = f"crosscheck_{cc_sid}".replace("-", "")
 
-                            st.session_state["kb_confirm_target"] = {
-                                "question": cc_q,
-                                "answer": original_answer,
-                                "key_prefix": restore_key_prefix,
-                                # 기존 세션ID를 그대로 재사용함 — 새로 만들면
-                                # 이어서 백업되는 라운드가 다른 세션으로 갈라져
-                                # 기존 구글시트 기록과 끊어짐.
-                                "crosscheck_session_id": cc_sid,
-                            }
-                            # v1.7 — 저장 시점에 verification_text 컬럼에는
-                            # change_summary가, next_verification_text 컬럼에는
-                            # 그 라운드의 확정 문서 전체가 들어가 있음(엔진의
-                            # save_crosscheck_round 호출부 참고). 그대로 매핑해
-                            # doc_rounds 구조로 복원함.
-                            st.session_state[f"{restore_key_prefix}_doc_rounds"] = [
-                                {
-                                    "round": r["round"],
-                                    "document": r.get("next_verification_text", ""),
-                                    "change_summary": r.get("verification_text", ""),
-                                    "verification_detail": "",
-                                    "next_prompt": r.get("cross_prompt", ""),
-                                    "external_ai_input": r.get("external_ai_input", ""),
+                    col_load, col_del = st.columns([5, 1])
+                    with col_load:
+                        if st.button(cc_label, key=f"load_{cc_key_base}", use_container_width=True):
+                            cc_rounds = engine.sheet_logger.get_crosscheck_rounds(cc_sid)
+                            if not cc_rounds:
+                                st.warning("이 항목의 라운드 기록을 찾지 못했습니다.")
+                            else:
+                                restore_key_prefix = cc_key_base
+                                original_answer = cc_rounds[0]["original_answer"]
+                                last_round = cc_rounds[-1]
+
+                                st.session_state["kb_confirm_target"] = {
+                                    "question": cc_q,
+                                    "answer": original_answer,
+                                    "key_prefix": restore_key_prefix,
+                                    # 기존 세션ID를 그대로 재사용함 — 새로 만들면
+                                    # 이어서 백업되는 라운드가 다른 세션으로 갈라져
+                                    # 기존 구글시트 기록과 끊어짐.
+                                    "crosscheck_session_id": cc_sid,
                                 }
-                                for r in cc_rounds
-                            ]
-                            # 마지막 라운드의 확정 문서를 "지금 진행 중인" 문서로 이어받음.
-                            resumed_document = (
-                                last_round.get("next_verification_text") or original_answer
-                            )
-                            st.session_state[f"{restore_key_prefix}_current_doc"] = resumed_document
-                            st.session_state[f"{restore_key_prefix}_next_prompt"] = engine.build_next_round_prompt(
-                                cc_q, resumed_document, last_round.get("verification_text", "")
-                            )
-                            st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 이어서 진행해주세요.")
-                            st.rerun()
+                                # v1.7 — 저장 시점에 verification_text 컬럼에는
+                                # change_summary가, next_verification_text 컬럼에는
+                                # 그 라운드의 확정 문서 전체가 들어가 있음(엔진의
+                                # save_crosscheck_round 호출부 참고). 그대로 매핑해
+                                # doc_rounds 구조로 복원함.
+                                st.session_state[f"{restore_key_prefix}_doc_rounds"] = [
+                                    {
+                                        "round": r["round"],
+                                        "document": r.get("next_verification_text", ""),
+                                        "change_summary": r.get("verification_text", ""),
+                                        "verification_detail": "",
+                                        "next_prompt": r.get("cross_prompt", ""),
+                                        "external_ai_input": r.get("external_ai_input", ""),
+                                    }
+                                    for r in cc_rounds
+                                ]
+                                # 마지막 라운드의 확정 문서를 "지금 진행 중인" 문서로 이어받음.
+                                resumed_document = (
+                                    last_round.get("next_verification_text") or original_answer
+                                )
+                                st.session_state[f"{restore_key_prefix}_current_doc"] = resumed_document
+                                st.session_state[f"{restore_key_prefix}_next_prompt"] = engine.build_next_round_prompt(
+                                    cc_q, resumed_document, last_round.get("verification_text", "")
+                                )
+                                st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 이어서 진행해주세요.")
+                                st.rerun()
+
+                    # 삭제 — 검증대기와 동일한 2단계 확인 방식 (2026-07-02 추가)
+                    cc_del_confirm_key = f"del_confirm_{cc_key_base}"
+                    with col_del:
+                        if st.button("🗑", key=f"del_{cc_key_base}", help="이 교차검증 진행 항목 삭제"):
+                            st.session_state[cc_del_confirm_key] = True
+                    if st.session_state.get(cc_del_confirm_key):
+                        st.caption(f"'{cc_short_q}' 항목을 삭제할까요? 진행 중이던 라운드 기록이 모두 사라지며 되돌릴 수 없습니다.")
+                        c_yes, c_no = st.columns(2)
+                        with c_yes:
+                            if st.button("삭제 확정", key=f"del_yes_{cc_key_base}", use_container_width=True):
+                                engine.sheet_logger.delete_crosscheck_session(cc_sid)
+                                st.session_state[cc_del_confirm_key] = False
+                                st.rerun()
+                        with c_no:
+                            if st.button("취소", key=f"del_no_{cc_key_base}", use_container_width=True):
+                                st.session_state[cc_del_confirm_key] = False
+                                st.rerun()
 
     st.divider()
     st.subheader("검색 기록")

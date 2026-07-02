@@ -698,6 +698,72 @@ def get_thread_label(turns):
     return first_q[:40] + ("..." if len(first_q) > 40 else "")
 
 
+def offer_downloads(title: str, question: str, answer: str, filename_hint: str = None, key_prefix: str = ""):
+    """
+    결과를 md/docx/pdf 바이트로 만들어 다운로드 버튼들을 그려줌.
+
+    설계 의도 (2026-06-25 — 웹 배포 지원):
+    - 기존 do_save()는 서버의 로컬 폴더(output_dir)에 직접 파일을 써서 저장했음.
+      PC에서는 동작했지만, 웹 서버에는 그 경로가 없어서 폴더 생성 자체가
+      실패하고, 그 예외가 처리되지 않은 채 위로 던져지면서 화면 전체가
+      다시 그려져 "펼쳐둔 화면이 갑자기 초기화면처럼 닫혀버리는" 문제가 있었음.
+    - 해결: 디스크에 쓰지 않고 바이트만 만들어서, st.download_button으로
+      사용자 컴퓨터에 직접 내려주는 방식으로 전환함. 이러면 서버 경로 문제가
+      원천적으로 없어지고, 로컬 PC에서 쓰든 웹에서 쓰든 동일하게 동작함.
+    - 다운로드는 버튼을 누르는 사용자의 즉시 행동이므로, 별도의 "저장 폴더"
+      설정이 필요 없음. 어디에 받을지는 브라우저의 다운로드 동작(또는
+      다운로드 위치 선택 대화상자)에 맡김.
+
+    Parameters
+    ----------
+    key_prefix : str
+        같은 화면에 여러 개의 다운로드 버튼이 있을 때 Streamlit 위젯 키가
+        충돌하지 않도록 구분하는 접두사 (예: 호출 위치 + 타임스탬프 조합).
+    """
+    # 버그 수정 메모 (2026-07-02, 2차): 이 함수 자체가 사이드바 코드보다
+    # 뒤쪽에 정의되어 있었음. st.dialog(검색 기록 상세보기 등)는 열리는
+    # 순간 그 아래 스크립트 실행을 멈추는 특성이 있어서, 사이드바보다 먼저
+    # 다이얼로그가 뜨면 "def offer_downloads(...)" 라인 자체가 이번 실행에서
+    # 아직 한 번도 지나가지 않은 상태가 되어 "NameError: name
+    # 'offer_downloads' is not defined"가 발생했음(사이드바 위젯 변수들
+    # (save_formats 등)에서 겪었던 것과 같은 종류의 문제가 함수 자체에도
+    # 있었던 것). 함수 정의를 사이드바보다 훨씬 앞쪽(다른 헬퍼 함수들
+    # 근처)으로 옮겨, 어떤 다이얼로그가 언제 열리든 항상 정의되어 있는
+    # 상태가 되도록 함.
+    #
+    # 안의 save_formats 등 값 자체는 여전히 session_state에서 읽음(1차
+    # 수정 때와 동일) — 실행 순서와 무관하게 항상 안전하도록 이중으로 보강.
+    use_custom_filename = st.session_state.get("use_custom_filename", False)
+    custom_filename = st.session_state.get("custom_filename", "")
+    filename = safe_filename(
+        custom_filename.strip() if (use_custom_filename and custom_filename.strip()) else filename_hint
+    )
+    formats = st.session_state.get("save_formats") or ["md"]
+
+    built = build_export_bytes(title=title, question=question, response_md=answer, formats=formats)
+
+    ext_map = {"md": ("text/markdown", ".md"), "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx"), "pdf": ("application/pdf", ".pdf")}
+    cols = st.columns(len(formats)) if formats else []
+    for col, fmt in zip(cols, formats):
+        data = built.get(fmt)
+        with col:
+            if data:
+                mime, ext = ext_map[fmt]
+                st.download_button(
+                    label=f"{fmt.upper()} 다운로드",
+                    data=data,
+                    file_name=f"{filename}{ext}",
+                    mime=mime,
+                    key=f"{key_prefix}_dl_{fmt}",
+                )
+            else:
+                st.button(f"{fmt.upper()} 다운로드 (사용 불가)", disabled=True, key=f"{key_prefix}_dl_{fmt}_disabled")
+
+    if built["errors"]:
+        for err in built["errors"]:
+            st.caption(f"⚠ {err}")
+
+
 def render_confirm_to_kb_button(question: str, answer: str, key_prefix: str, dialog_row_key: str = None):
     """
     '지식베이스에 확정 저장' 버튼만 그림. 누르면 실제 작업 화면은 이 버튼이 있는
@@ -1708,64 +1774,6 @@ with st.sidebar:
 # ----------------------------------------------------------------------
 # 저장 헬퍼
 # ----------------------------------------------------------------------
-def offer_downloads(title: str, question: str, answer: str, filename_hint: str = None, key_prefix: str = ""):
-    """
-    결과를 md/docx/pdf 바이트로 만들어 다운로드 버튼들을 그려줌.
-
-    설계 의도 (2026-06-25 — 웹 배포 지원):
-    - 기존 do_save()는 서버의 로컬 폴더(output_dir)에 직접 파일을 써서 저장했음.
-      PC에서는 동작했지만, 웹 서버에는 그 경로가 없어서 폴더 생성 자체가
-      실패하고, 그 예외가 처리되지 않은 채 위로 던져지면서 화면 전체가
-      다시 그려져 "펼쳐둔 화면이 갑자기 초기화면처럼 닫혀버리는" 문제가 있었음.
-    - 해결: 디스크에 쓰지 않고 바이트만 만들어서, st.download_button으로
-      사용자 컴퓨터에 직접 내려주는 방식으로 전환함. 이러면 서버 경로 문제가
-      원천적으로 없어지고, 로컬 PC에서 쓰든 웹에서 쓰든 동일하게 동작함.
-    - 다운로드는 버튼을 누르는 사용자의 즉시 행동이므로, 별도의 "저장 폴더"
-      설정이 필요 없음. 어디에 받을지는 브라우저의 다운로드 동작(또는
-      다운로드 위치 선택 대화상자)에 맡김.
-
-    Parameters
-    ----------
-    key_prefix : str
-        같은 화면에 여러 개의 다운로드 버튼이 있을 때 Streamlit 위젯 키가
-        충돌하지 않도록 구분하는 접두사 (예: 호출 위치 + 타임스탬프 조합).
-    """
-    # 버그 수정 메모 (2026-07-02): 예전에는 이 값들을 사이드바 코드가 만든
-    # 지역 변수로 그냥 참조했는데, st.dialog 팝업(검색 기록 상세보기 등)
-    # 안에서 이 함수가 먼저 호출되면 사이드바 코드가 아직 실행 전이라
-    # NameError가 발생했음. 실행 순서와 무관한 st.session_state에서 읽도록
-    # 변경 (파일 상단의 setdefault로 항상 기본값이 보장되어 있음).
-    use_custom_filename = st.session_state.get("use_custom_filename", False)
-    custom_filename = st.session_state.get("custom_filename", "")
-    filename = safe_filename(
-        custom_filename.strip() if (use_custom_filename and custom_filename.strip()) else filename_hint
-    )
-    formats = st.session_state.get("save_formats") or ["md"]
-
-    built = build_export_bytes(title=title, question=question, response_md=answer, formats=formats)
-
-    ext_map = {"md": ("text/markdown", ".md"), "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx"), "pdf": ("application/pdf", ".pdf")}
-    cols = st.columns(len(formats)) if formats else []
-    for col, fmt in zip(cols, formats):
-        data = built.get(fmt)
-        with col:
-            if data:
-                mime, ext = ext_map[fmt]
-                st.download_button(
-                    label=f"{fmt.upper()} 다운로드",
-                    data=data,
-                    file_name=f"{filename}{ext}",
-                    mime=mime,
-                    key=f"{key_prefix}_dl_{fmt}",
-                )
-            else:
-                st.button(f"{fmt.upper()} 다운로드 (사용 불가)", disabled=True, key=f"{key_prefix}_dl_{fmt}_disabled")
-
-    if built["errors"]:
-        for err in built["errors"]:
-            st.caption(f"⚠ {err}")
-
-
 def build_combined_text(turns):
     blocks = []
     for i, qa in enumerate(turns, start=1):

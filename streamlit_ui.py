@@ -26,11 +26,13 @@ Windows 환경 기준으로 작성됨.
 """
 
 import os
+import json
 import uuid
 from pathlib import Path
 from datetime import datetime
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 # .env 파일을 여기서 직접 한 번 읽어둠.
 # (tax_advisor_engine.py도 자체적으로 .env를 읽지만, 그건 엔진 객체가 만들어질 때
@@ -571,6 +573,61 @@ st.session_state.setdefault("summary_doc_turns_count", 0)
 st.session_state.setdefault("kb_confirm_target", None)
 
 
+def render_copy_button(text: str, key: str, label: str = "📋 복사하기"):
+    """
+    주어진 텍스트를 클립보드에 복사하는 버튼을 그림.
+
+    Streamlit의 st.button은 서버(파이썬) 쪽에서 눌림 여부만 알 수 있을 뿐,
+    브라우저 클립보드에 직접 접근할 방법이 없음. 클립보드 복사는 브라우저
+    JS의 navigator.clipboard API가 있어야만 가능하므로, 순수 HTML/JS를
+    components.html로 삽입해 처리함(서버 왕복 없이 클릭 즉시 브라우저에서
+    바로 실행됨).
+
+    text는 json.dumps로 감싸 JS 문자열 리터럴로 안전하게 이스케이프함
+    (텍스트 안에 따옴표·줄바꿈·백틱 등이 있어도 깨지지 않도록).
+
+    key는 버튼의 HTML id로 쓰이므로, 화면에 같은 컴포넌트가 여러 개 있을
+    때는 반드시 서로 다른 값을 넘겨야 함(다른 위젯들과 동일한 패턴).
+    """
+    safe_text = json.dumps(text or "")
+    btn_id = f"pf_copy_btn_{key}"
+    html = f"""
+    <div style="margin: 2px 0 12px;">
+      <button id="{btn_id}" onclick="
+        navigator.clipboard.writeText({safe_text}).then(function() {{
+          var btn = document.getElementById('{btn_id}');
+          btn.innerText = '✅ 복사됨';
+          setTimeout(function() {{ btn.innerText = {json.dumps(label)}; }}, 1500);
+        }}).catch(function(err) {{
+          var btn = document.getElementById('{btn_id}');
+          btn.innerText = '복사 실패 (직접 드래그해주세요)';
+        }});
+      " style="
+        background-color: #0c2340;
+        color: #e0b020;
+        border: 1px solid #e0b020;
+        border-radius: 6px;
+        padding: 5px 14px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: inherit;
+      ">{label}</button>
+    </div>
+    """
+    components.html(html, height=44)
+
+
+def render_copyable_text(text: str, key: str, label: str = "📋 복사하기"):
+    """
+    텍스트를 마크다운으로 표시하고, 그 위에 복사 버튼을 함께 그림.
+    (드래그 + Ctrl+C 대신 이 버튼을 쓰면, Streamlit의 'c' 단축키가
+    실수로 눌려 캐시가 지워지고 세션이 끊기는 문제를 피할 수 있음)
+    """
+    render_copy_button(text, key=key, label=label)
+    st.markdown(text)
+
+
 def get_thread_label(turns):
     """묶음의 첫 질문을 짧게 잘라 제목처럼 사용"""
     if not turns:
@@ -704,7 +761,7 @@ def render_confirm_to_kb_workspace():
     with st.expander("대상 질문 / 원본 답변 보기", expanded=False):
         st.markdown(f"**질문**: {question}")
         st.markdown("**원본 답변**")
-        st.markdown(answer)
+        render_copyable_text(answer, key=f"{key_prefix}_orig_answer")
 
     if not engine.has_pin_set():
         st.warning("먼저 사이드바에서 확정 PIN을 설정해주세요.")
@@ -792,7 +849,7 @@ def render_confirm_to_kb_workspace():
         st.write(r["change_summary"])
         is_latest = (r["round"] == current_round)
         with st.expander(f"{r['round']}차 확정 문서 전체 보기", expanded=is_latest):
-            st.markdown(r["document"])
+            render_copyable_text(r["document"], key=f"{key_prefix}_round_{r['round']}_doc")
         if r.get("external_ai_input"):
             with st.expander(f"{r['round']}차에 보냈던 질문", expanded=False):
                 st.code(r.get("next_prompt", "(기록 없음)"), language="text")
@@ -990,10 +1047,9 @@ def show_log_dialog():
     st.markdown(f"**질문**")
     st.write(question)
     st.divider()
-    st.markdown(answer)
-    st.divider()
-
     dialog_key_base = f"dialog_{row.get('일시', '')}".replace(" ", "_").replace(":", "")
+    render_copyable_text(answer, key=f"{dialog_key_base}_answer")
+    st.divider()
 
     col1, col2, col3 = st.columns([1, 1.4, 1])
     with col1:
@@ -1073,10 +1129,9 @@ def show_summary_log_dialog():
         f"{row.get('일시', '')}  ·  포함된 질의 {row.get('포함된질의건수', '?')}건  ·  "
         f"{row.get('사용자구분', '')}"
     )
-    st.markdown(summary_text)
-    st.divider()
-
     dialog_key_base = f"sdialog_{row.get('일시', '')}".replace(" ", "_").replace(":", "")
+    render_copyable_text(summary_text, key=f"{dialog_key_base}_summary")
+    st.divider()
 
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -1709,7 +1764,7 @@ if st.session_state.current_thread:
         with st.container(border=True):
             st.markdown(f"<div class='qa-meta'>{qa['time']}</div>", unsafe_allow_html=True)
             st.markdown(f"<div class='qa-question'>Q. {qa['question']}</div>", unsafe_allow_html=True)
-            st.markdown(qa["answer"])
+            render_copyable_text(qa["answer"], key=f"copy_cur_{qa_key}")
 
             col1, col2, col3 = st.columns([1, 1, 1.4])
             with col1:
@@ -1758,7 +1813,7 @@ if st.session_state.current_thread:
 
     if st.session_state.summary_doc:
         st.markdown("### 종합 문서 결과")
-        st.markdown(st.session_state.summary_doc)
+        render_copyable_text(st.session_state.summary_doc, key="copy_summary_cur")
         save_show_key = "save_summary_cur_show"
         if st.button("종합 문서 저장", key="save_summary_cur"):
             st.session_state[save_show_key] = True
@@ -1786,7 +1841,8 @@ if st.session_state.backlog:
                 for qa in bundle["turns"]:
                     st.markdown(f"<div class='qa-meta'>{qa['time']}</div>", unsafe_allow_html=True)
                     st.markdown(f"<div class='qa-question'>Q. {qa['question']}</div>", unsafe_allow_html=True)
-                    st.markdown(qa["answer"])
+                    qa_time_key = qa["time"].replace("-", "").replace(":", "").replace(" ", "_")
+                    render_copyable_text(qa["answer"], key=f"copy_backlog_{b_idx}_{qa_time_key}")
                     st.markdown("---")
 
                 col1, col2 = st.columns([1, 1])
@@ -1809,7 +1865,7 @@ if st.session_state.backlog:
                             )
 
                     if st.session_state.get(backlog_summary_key):
-                        st.markdown(st.session_state[backlog_summary_key])
+                        render_copyable_text(st.session_state[backlog_summary_key], key=f"{backlog_summary_key}_copy_text")
                         save_show_key = f"{backlog_summary_key}_save_show"
                         if st.button("이 종합 문서 저장", key=f"{backlog_summary_key}_save_btn"):
                             st.session_state[save_show_key] = True

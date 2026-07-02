@@ -6,8 +6,11 @@ doc_export.py
 
 - md  : 별도 변환 없이 그대로 .md 파일로 저장 (tax_advisor_engine.py의 save_response와 동일)
 - docx: python-docx 사용. 마크다운 헤더(###)와 굵게(**) 표시를 기본적인 Word 서식으로 변환.
-- pdf : fpdf2 사용. 한글 출력을 위해 Windows 시스템 폰트(맑은 고딕)를 자동으로 찾아 사용.
-        폰트를 찾지 못하면 PDF 생성을 건너뛰고 명확한 안내 메시지를 반환.
+        본문 한글이 네모(□)로 깨지지 않도록, 모든 run에 w:eastAsia 폰트를 명시적으로 지정함.
+- pdf : fpdf2 사용. 한글 출력을 위해 이 폴더의 assets/fonts/NanumGothic-Regular.ttf를
+        최우선으로 사용(로컬/웹 배포 환경 무관하게 항상 사용 가능). 이 파일이 없으면
+        로컬 Windows 시스템 폰트(맑은 고딕)나 Linux 시스템의 나눔고딕을 대신 찾아봄.
+        폰트를 전혀 찾지 못하면 PDF 생성을 건너뛰고 명확한 안내 메시지를 반환.
 
 Windows 환경 기준으로 작성됨.
 """
@@ -122,6 +125,31 @@ def build_docx_bytes(title: str, question: str, response_md: str) -> bytes:
         p_borders.append(bottom)
         p_pr.append(p_borders)
 
+    def _apply_korean_font(run, name="맑은 고딕"):
+        """
+        run에 한글 폰트를 적용.
+
+        원인 메모 (2026-07-02, DOCX 본문이 네모(□)로 깨지는 문제 조사):
+        python-docx의 run.font.name = "맑은 고딕" 는 OOXML의 rFonts 중
+        w:ascii / w:hAnsi(영문·숫자용)만 설정하고, 한글이 속하는
+        w:eastAsia는 건드리지 않음. 제목(_add_section_heading 등)에서만
+        font.name을 지정하고 본문 텍스트는 지정하지 않았던 게 아니라,
+        본문도 지정은 했지만(스타일 레벨) eastAsia가 비어 있다 보니
+        Word/뷰어가 자체 기본 동아시아 폰트로 대체함 — 그 기본값이
+        한글을 지원하지 않는 환경(웹 뷰어, 한글 폰트 없는 PC 등)에서는
+        글자가 전부 네모로 보임(텍스트 데이터 자체는 깨지지 않았음).
+        w:eastAsia를 명시적으로 지정해 이 문제를 구조적으로 차단함.
+        """
+        run.font.name = name
+        r_pr = run._element.get_or_add_rPr()
+        r_fonts = r_pr.find(qn("w:rFonts"))
+        if r_fonts is None:
+            r_fonts = OxmlElement("w:rFonts")
+            r_pr.append(r_fonts)
+        r_fonts.set(qn("w:eastAsia"), name)
+        r_fonts.set(qn("w:ascii"), name)
+        r_fonts.set(qn("w:hAnsi"), name)
+
     doc = Document()
 
     # 기본 폰트 설정 (한글 가독성을 위해 맑은 고딕 우선)
@@ -129,6 +157,18 @@ def build_docx_bytes(title: str, question: str, response_md: str) -> bytes:
     style.font.name = "맑은 고딕"
     style.font.size = Pt(10.5)
     style.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+    # style.font.name만으로는 rFonts의 w:ascii/w:hAnsi(영문용)만 설정되고
+    # 한글이 속하는 w:eastAsia는 비어있는 채로 남음. 이 값이 비어있으면
+    # Word/뷰어가 자체 기본 동아시아 폰트로 대체하는데, 그 기본값에 한글이
+    # 없는 환경(한글 폰트 없는 웹 뷰어 등)에서는 본문 전체가 네모(□)로
+    # 보이는 원인이 됨. Normal 스타일 자체에도 eastAsia를 명시해 둠
+    # (아래에서 실제 각 run에도 한 번 더 명시적으로 지정해 이중으로 보강함).
+    style_r_pr = style.element.get_or_add_rPr()
+    style_r_fonts = style_r_pr.find(qn("w:rFonts"))
+    if style_r_fonts is None:
+        style_r_fonts = OxmlElement("w:rFonts")
+        style_r_pr.append(style_r_fonts)
+    style_r_fonts.set(qn("w:eastAsia"), "맑은 고딕")
 
     # 표지 영역 ---------------------------------------------------------
     # 제목: 포인트 컬러 굵게 + 아래 강조선으로 화면 헤더의 느낌을 재현
@@ -138,7 +178,7 @@ def build_docx_bytes(title: str, question: str, response_md: str) -> bytes:
     title_run.font.size = Pt(20)
     title_run.font.bold = True
     title_run.font.color.rgb = PF_TEXT_STRONG
-    title_run.font.name = "맑은 고딕"
+    _apply_korean_font(title_run)
     _set_paragraph_border_bottom(title_p, color_hex="2563EB", size=16)
     title_p.paragraph_format.space_after = Pt(10)
 
@@ -149,6 +189,7 @@ def build_docx_bytes(title: str, question: str, response_md: str) -> bytes:
     meta_run.italic = True
     meta_run.font.size = Pt(9)
     meta_run.font.color.rgb = PF_TEXT_MUTED
+    _apply_korean_font(meta_run)
 
     def _add_section_heading(text, level=2):
         """포인트 컬러를 쓰는 섹션 제목 (## , ### 공통 처리)"""
@@ -157,7 +198,7 @@ def build_docx_bytes(title: str, question: str, response_md: str) -> bytes:
         h.paragraph_format.space_after = Pt(6)
         run = h.add_run(text)
         run.font.color.rgb = PF_ACCENT if level == 2 else PF_TEXT_STRONG
-        run.font.name = "맑은 고딕"
+        _apply_korean_font(run)
         run.font.size = Pt(14) if level == 2 else Pt(12)
         run.font.bold = True
         return h
@@ -166,6 +207,8 @@ def build_docx_bytes(title: str, question: str, response_md: str) -> bytes:
         _add_section_heading("질의 내용", level=2)
         q_p = doc.add_paragraph(question)
         q_p.paragraph_format.space_after = Pt(10)
+        for r in q_p.runs:
+            _apply_korean_font(r)
 
     _add_section_heading("AI 회신", level=2)
 
@@ -183,6 +226,7 @@ def build_docx_bytes(title: str, question: str, response_md: str) -> bytes:
             for text, is_bold in _split_bold(content):
                 run = p.add_run(text)
                 run.bold = is_bold
+                _apply_korean_font(run)
                 if is_bold:
                     run.font.color.rgb = PF_TEXT_STRONG
         else:  # text
@@ -191,6 +235,7 @@ def build_docx_bytes(title: str, question: str, response_md: str) -> bytes:
             for text, is_bold in _split_bold(content):
                 run = p.add_run(text)
                 run.bold = is_bold
+                _apply_korean_font(run)
                 if is_bold:
                     run.font.color.rgb = PF_TEXT_STRONG
 
@@ -205,6 +250,7 @@ def build_docx_bytes(title: str, question: str, response_md: str) -> bytes:
     footer_run.italic = True
     footer_run.font.size = Pt(9)
     footer_run.font.color.rgb = PF_TEXT_MUTED
+    _apply_korean_font(footer_run)
 
     buffer = BytesIO()
     doc.save(buffer)
@@ -216,8 +262,19 @@ def build_docx_bytes(title: str, question: str, response_md: str) -> bytes:
 # ----------------------------------------------------------------------
 def _find_korean_font() -> str:
     """
-    시스템에서 한글 폰트를 자동으로 탐색.
-    Windows(로컬 PC)와 Linux(웹 서버) 양쪽 환경을 모두 고려함.
+    한글 폰트를 탐색.
+
+    우선순위:
+    ① 이 파일(doc_export.py)과 함께 저장소에 커밋해 둔 번들 폰트
+       (assets/fonts/NanumGothic-Regular.ttf) — 로컬/웹 배포 환경과
+       무관하게 항상 존재하므로 가장 먼저 확인함. 웹 배포 환경
+       (Streamlit Cloud 기본 이미지)에는 애초에 한글 폰트가 설치되어
+       있지 않아 PDF 생성이 항상 실패했는데, 폰트 파일 자체를 저장소에
+       포함시켜 이 문제를 근본적으로 해결함(서버에 폰트를 설치할 권한이
+       없어도 됨 — 그냥 git에 파일로 들어있는 것만으로 충분).
+    ② 로컬 PC(Windows)의 시스템 폰트(맑은 고딕) — 번들 폰트가 없는
+       구버전 체크아웃 등 예외 상황 대비.
+    ③ Linux 시스템에 나눔고딕이 별도로 설치되어 있는 경우.
 
     주의: .ttc(TrueType Collection, 여러 폰트가 한 파일에 묶인 형식)는 fpdf2가
     제대로 처리하지 못해 렌더링 에러가 나는 경우가 있어 후보에서 제외함.
@@ -225,11 +282,12 @@ def _find_korean_font() -> str:
 
     찾지 못하면 빈 문자열 반환 (이 경우 PDF 생성은 건너뛰고 md/docx로 안내).
     """
+    bundled_font = Path(__file__).resolve().parent / "assets" / "fonts" / "NanumGothic-Regular.ttf"
     candidates = [
-        # Windows (로컬 PC)
-        r"C:\Windows\Fonts\malgun.ttf",       # 맑은 고딕
+        str(bundled_font),                    # ① 저장소에 함께 커밋된 폰트 (최우선)
+        r"C:\Windows\Fonts\malgun.ttf",       # ② 맑은 고딕 (로컬 PC)
         r"C:\Windows\Fonts\malgunbd.ttf",     # 맑은 고딕 Bold
-        # Linux (Streamlit Cloud 등 웹 서버 — 나눔고딕이 설치되어 있는 경우)
+        # ③ Linux (Streamlit Cloud 등 웹 서버 — 나눔고딕이 시스템에 별도 설치된 경우)
         "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
         "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
     ]
@@ -261,14 +319,17 @@ def build_pdf_bytes(title: str, question: str, response_md: str) -> bytes:
         많으므로, 이 경우 호출하는 쪽에서 PDF를 건너뛰고 md/docx로 안내해야 함.
     """
     from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
 
     font_path = _find_korean_font()
     if not font_path:
         raise RuntimeError(
             "한글 폰트를 찾을 수 없어 PDF를 생성할 수 없습니다.\n"
-            "로컬 PC: Windows 폰트 폴더(C:\\Windows\\Fonts)에 malgun.ttf가 있는지 확인하세요.\n"
-            "웹 배포 환경: 서버에 한글 폰트가 설치되어 있지 않습니다.\n"
-            "대신 Word(.docx) 또는 마크다운(.md) 형식으로 받아주세요."
+            "가장 확실한 해결책: 이 저장소의 doc_export.py와 같은 폴더에 "
+            "assets/fonts/NanumGothic-Regular.ttf 파일을 커밋해두면, 로컬/웹 "
+            "환경 어디서든 이 폰트가 자동으로 사용됩니다.\n"
+            "(참고) 로컬 PC: Windows 폰트 폴더(C:\\Windows\\Fonts)에 malgun.ttf가 있는지 확인하세요.\n"
+            "위 방법이 모두 안 되면 대신 Word(.docx) 또는 마크다운(.md) 형식으로 받아주세요."
         )
 
     # 디자인 테마 (streamlit_ui.py / build_docx_bytes와 색감 통일)
@@ -283,9 +344,30 @@ def build_pdf_bytes(title: str, question: str, response_md: str) -> bytes:
     pdf.add_font("korean", "", font_path)
     pdf.set_font("korean", size=18)
 
+    def mc(height, text):
+        """
+        pdf.multi_cell을 감싸는 헬퍼.
+
+        원인 메모 (2026-07-02, 한글 폰트를 정상적으로 찾은 뒤에도 PDF 생성이
+        "글자 하나 놓을 공간도 없다(Not enough horizontal space to render a
+        single character)"는 오류로 실패하던 문제 조사):
+        이 프로젝트가 쓰는 fpdf2 버전은 multi_cell 호출이 끝난 뒤 커서
+        x좌표를 왼쪽 여백이 아니라 "방금 그린 줄의 오른쪽 끝"에 남겨두는
+        것이 기본 동작(new_x 기본값 = XPos.RIGHT)임. 그 상태에서 너비를
+        0(= "현재 x좌표부터 오른쪽 여백까지 남은 폭 전부 사용")으로 지정한
+        다음 multi_cell을 또 호출하면, 남은 폭이 사실상 0에 가까워 글자
+        하나 그릴 공간도 없다고 판단해 예외가 발생함. 이전까지는 서버에
+        한글 폰트 자체가 없어 PDF 생성이 그보다 먼저 실패했기 때문에 이
+        문제가 겉으로 드러나지 않았을 뿐, 폰트를 고치자 함께 드러난
+        별개의 실제 버그였음.
+        모든 호출을 이 헬퍼로 통일해 매번 명시적으로 왼쪽 여백으로
+        커서를 되돌리도록(new_x=XPos.LMARGIN, new_y=YPos.NEXT) 고정함.
+        """
+        pdf.multi_cell(0, height, text, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
     # 표지 영역: 포인트 컬러 제목 + 아래 강조선 -------------------------
     pdf.set_text_color(*PF_TEXT_STRONG)
-    pdf.multi_cell(0, 11, title)
+    mc(11, title)
     pdf.set_draw_color(*PF_ACCENT)
     pdf.set_line_width(0.8)
     line_y = pdf.get_y() + 1
@@ -294,21 +376,21 @@ def build_pdf_bytes(title: str, question: str, response_md: str) -> bytes:
 
     pdf.set_font("korean", size=9)
     pdf.set_text_color(*PF_TEXT_MUTED)
-    pdf.multi_cell(0, 6, f"생성일시  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    mc(6, f"생성일시  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     pdf.ln(4)
 
     if question:
         pdf.set_font("korean", size=13)
         pdf.set_text_color(*PF_ACCENT)
-        pdf.multi_cell(0, 8, "질의 내용")
+        mc(8, "질의 내용")
         pdf.set_font("korean", size=10)
         pdf.set_text_color(*PF_TEXT_BODY)
-        pdf.multi_cell(0, 6, question)
+        mc(6, question)
         pdf.ln(4)
 
     pdf.set_font("korean", size=13)
     pdf.set_text_color(*PF_ACCENT)
-    pdf.multi_cell(0, 8, "AI 회신")
+    mc(8, "AI 회신")
     pdf.set_text_color(*PF_TEXT_BODY)
     pdf.ln(1)
 
@@ -322,13 +404,13 @@ def build_pdf_bytes(title: str, question: str, response_md: str) -> bytes:
             pdf.set_font("korean", size=size)
             pdf.set_text_color(*PF_TEXT_STRONG)
             pdf.ln(2)
-            pdf.multi_cell(0, 7, plain_text)
+            mc(7, plain_text)
             pdf.set_font("korean", size=10)
             pdf.set_text_color(*PF_TEXT_BODY)
         elif kind == "bullet":
-            pdf.multi_cell(0, 6, f"  - {plain_text}")
+            mc(6, f"  - {plain_text}")
         else:
-            pdf.multi_cell(0, 6, plain_text)
+            mc(6, plain_text)
 
     # 푸터: 옅은 회색 구분선 + 보조 텍스트 -------------------------------
     pdf.ln(6)
@@ -339,7 +421,7 @@ def build_pdf_bytes(title: str, question: str, response_md: str) -> bytes:
     pdf.ln(3)
     pdf.set_font("korean", size=8)
     pdf.set_text_color(*PF_TEXT_MUTED)
-    pdf.multi_cell(0, 5, "포스원 회계법인 세무질의 AI 시스템 자동 생성")
+    mc(5, "포스원 회계법인 세무질의 AI 시스템 자동 생성")
 
     return bytes(pdf.output())
 

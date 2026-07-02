@@ -33,7 +33,6 @@ from pathlib import Path
 from datetime import datetime
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 # .env 파일을 여기서 직접 한 번 읽어둠.
 # (tax_advisor_engine.py도 자체적으로 .env를 읽지만, 그건 엔진 객체가 만들어질 때
@@ -583,21 +582,33 @@ st.session_state.setdefault("custom_filename", "")
 st.session_state.setdefault("_kb_last_saved_path", None)
 
 
-def render_copy_button(text: str, key: str, label: str = "📋 복사하기"):
+def render_copy_button(text: str, key: str, label: str = "복사"):
     """
-    주어진 텍스트를 클립보드에 복사하는 버튼을 그림.
+    주어진 텍스트를 클립보드에 복사하는, 눈에 크게 띄지 않는 작은 아이콘 버튼을 그림.
 
     Streamlit의 st.button은 서버(파이썬) 쪽에서 눌림 여부만 알 수 있을 뿐,
     브라우저 클립보드에 직접 접근할 방법이 없음. 클립보드 복사는 브라우저
-    JS가 있어야만 가능하므로, 순수 HTML/JS를 components.html로 삽입해
-    처리함(서버 왕복 없이 클릭 즉시 브라우저에서 바로 실행됨).
+    JS가 있어야만 가능하므로, 순수 HTML/JS를 iframe에 삽입해 처리함(서버
+    왕복 없이 클릭 즉시 브라우저에서 바로 실행됨).
+
+    렌더링 방식 (2026-07-02 변경): 기존에는 st.components.v1.html을 썼는데,
+    Streamlit이 이 API를 2026-06-01 이후 제거 예정으로 공지하고 있어
+    (배포 로그에 "Please replace st.components.v1.html with st.iframe"
+    경고가 뜸), st.iframe으로 교체함. st.iframe은 HTML 문자열을 넣으면
+    자동으로 감지해 같은 방식으로 렌더링해줌(사용법 동일).
+
+    스타일 (2026-07-02 변경): 처음엔 네이비/골드 배경의 큰 버튼이었는데,
+    실사용 피드백으로 "너무 눈에 띈다"는 의견을 받아 — 지금 앱에서 이미
+    "다음 라운드에 보낼 질문"을 보여줄 때 쓰는 st.code() 코드블록 우측
+    상단의 작은 복사 아이콘과 비슷한 느낌으로, 테두리만 있는 작은
+    아이콘 버튼으로 축소함.
 
     복사 방식은 두 단계로 시도함:
-    ① navigator.clipboard.writeText — 최신 API, 가장 깔끔하지만 이 버튼이
-       components.html의 iframe 안에서 실행되다 보니, 배포 환경에 따라
-       브라우저의 Permissions Policy가 iframe에는 클립보드 쓰기 권한을
-       기본적으로 내려주지 않아 조용히 실패하는 사례가 확인됨(실사용
-       테스트 — 버튼은 보이지만 클릭해도 복사가 안 되는 현상).
+    ① navigator.clipboard.writeText — 최신 API. 다만 iframe 안에서
+       실행되다 보니, 배포 환경에 따라 브라우저의 Permissions Policy가
+       iframe에는 클립보드 쓰기 권한을 기본적으로 내려주지 않아 조용히
+       실패하는 사례가 확인됨(실사용 테스트 — 버튼은 보이지만 클릭해도
+       복사가 안 되는 현상).
     ② ①이 실패하면 즉시 document.execCommand('copy')로 대체 — 화면
        밖에 숨겨진 textarea에 텍스트를 넣고 선택한 뒤 복사하는 오래된
        방식이라 최신 API보다 지원 범위가 넓고, iframe 안에서도 별도
@@ -610,37 +621,38 @@ def render_copy_button(text: str, key: str, label: str = "📋 복사하기"):
     때는 반드시 서로 다른 값을 넘겨야 함(다른 위젯들과 동일한 패턴).
     """
     safe_text = json.dumps(text or "")
-    safe_label = json.dumps(label)
     safe_key = re.sub(r"[^0-9a-zA-Z_]", "_", str(key))
     btn_id = f"pf_copy_btn_{safe_key}"
     ta_id = f"pf_copy_ta_{safe_key}"
     html = f"""
-    <div style="margin: 2px 0 12px;">
+    <div style="display:flex; justify-content:flex-end; margin: 0 0 4px;">
       <textarea id="{ta_id}" style="position:fixed; top:-9999px; left:-9999px; opacity:0;"></textarea>
-      <button id="{btn_id}" onclick="pfCopy_{safe_key}()" style="
-        background-color: #0c2340;
-        color: #e0b020;
-        border: 1px solid #e0b020;
-        border-radius: 6px;
-        padding: 5px 14px;
-        font-size: 0.82rem;
-        font-weight: 600;
+      <button id="{btn_id}" onclick="pfCopy_{safe_key}()" title="복사" style="
+        background-color: transparent;
+        color: #6b7280;
+        border: 1px solid #d1d5db;
+        border-radius: 5px;
+        padding: 1px 8px;
+        font-size: 0.72rem;
+        font-weight: 500;
         cursor: pointer;
         font-family: inherit;
-      ">{label}</button>
+        line-height: 1.6;
+      ">📋 {label}</button>
     </div>
     <script>
       function pfCopy_{safe_key}() {{
         var text = {safe_text};
         var btn = document.getElementById('{btn_id}');
+        var originalHTML = btn.innerHTML;
 
         function onSuccess() {{
-          btn.innerText = '✅ 복사됨';
-          setTimeout(function() {{ btn.innerText = {safe_label}; }}, 1500);
+          btn.innerHTML = '✅';
+          setTimeout(function() {{ btn.innerHTML = originalHTML; }}, 1200);
         }}
         function onFail() {{
-          btn.innerText = '복사 실패 (직접 드래그해주세요)';
-          setTimeout(function() {{ btn.innerText = {safe_label}; }}, 2000);
+          btn.innerHTML = '복사 실패';
+          setTimeout(function() {{ btn.innerHTML = originalHTML; }}, 1800);
         }}
         function fallbackCopy() {{
           try {{
@@ -665,14 +677,12 @@ def render_copy_button(text: str, key: str, label: str = "📋 복사하기"):
       }}
     </script>
     """
-    components.html(html, height=44)
+    st.iframe(html, height=30)
 
 
-
-
-def render_copyable_text(text: str, key: str, label: str = "📋 복사하기"):
+def render_copyable_text(text: str, key: str, label: str = "복사"):
     """
-    텍스트를 마크다운으로 표시하고, 그 위에 복사 버튼을 함께 그림.
+    텍스트를 마크다운으로 표시하고, 그 위 우측에 작은 복사 아이콘 버튼을 함께 그림.
     (드래그 + Ctrl+C 대신 이 버튼을 쓰면, Streamlit의 'c' 단축키가
     실수로 눌려 캐시가 지워지고 세션이 끊기는 문제를 피할 수 있음)
     """
@@ -1622,18 +1632,22 @@ with st.sidebar:
     # "검색 기록" 항목을 눌러 다이얼로그가 뜨면 이 아래 코드가 아직 실행 전
     # 상태 → 다이얼로그 안에서 저장을 누르면 NameError가 났음. key=로
     # session_state에 연결해두면 실행 순서와 무관하게 항상 값을 읽을 수 있음.
+    # 버그 수정 (2026-07-02): 파일 상단에서 이미 st.session_state.setdefault로
+    # 이 키들의 초기값을 넣어뒀는데, 위젯 생성 시 default=/value=까지 같이
+    # 주면 Streamlit이 "Session State로 값이 설정된 위젯에 default까지 줬다"는
+    # 경고(policy 위반)를 띄움. 동작에는 지장 없지만 로그가 지저분해지므로,
+    # 초기값 지정은 session_state.setdefault 쪽에만 맡기고 위젯에서는 뺌.
     save_formats = st.multiselect(
         "다운로드 형식 (여러 개 선택 가능)",
         options=["md", "docx", "pdf"],
-        default=["md"],
         help="pdf는 서버에 한글 폰트가 없으면 생성되지 않을 수 있습니다. "
         "이 경우 md 또는 docx로 받아주세요.",
         key="save_formats",
     )
-    use_custom_filename = st.checkbox("파일명 직접 지정", value=False, key="use_custom_filename")
+    use_custom_filename = st.checkbox("파일명 직접 지정", key="use_custom_filename")
     custom_filename = ""
     if use_custom_filename:
-        custom_filename = st.text_input("파일명 (확장자 제외)", value="", key="custom_filename")
+        custom_filename = st.text_input("파일명 (확장자 제외)", key="custom_filename")
 
     st.divider()
     st.subheader("전체 초기화")

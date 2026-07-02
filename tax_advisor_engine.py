@@ -623,7 +623,7 @@ class TaxAdvisorEngine:
     # ------------------------------------------------------------------
     # 법제처 Open API 연동 (선택 기능)
     # ------------------------------------------------------------------
-    def fetch_law_context(self, user_question: str, max_articles: int = 5) -> str:
+    def fetch_law_context(self, user_question: str, max_articles: int = 5, search_text: str = None) -> str:
         """
         질문 내용에서 법령명을 추정하여 법제처 API로 관련 조문을 조회
 
@@ -634,9 +634,18 @@ class TaxAdvisorEngine:
         Parameters
         ----------
         user_question : str
-            사용자 질문
+            사용자 질문 (원문 그대로 — 결과 텍스트에는 영향 없고, search_text가
+            없을 때 매칭에 사용됨)
         max_articles : int
             법령 1건당 가져올 최대 조문 수
+        search_text : str, optional
+            법령명 매칭(COMMON_TAX_LAWS 포함 여부 확인)에 실제로 사용할 텍스트.
+            생략하면 user_question을 그대로 사용함(기존 동작과 동일).
+
+            2026-07-02 추가 이유: 꼬리질문("그럼 세율은?")은 그 자체로는 법령명이
+            안 들어있어 매칭에 실패하기 쉬움. 이런 경우 호출하는 쪽(generate_guideline)이
+            직전 대화 맥락을 반영해 풀어쓴 문장을 search_text로 넘겨주면, 원래
+            질문 텍스트는 그대로 두고 매칭용 텍스트만 바꿔치기할 수 있음.
 
         Returns
         -------
@@ -646,7 +655,7 @@ class TaxAdvisorEngine:
         if self.law_client is None:
             return ""
 
-        matched_laws = [law for law in self.COMMON_TAX_LAWS if law in user_question]
+        matched_laws = [law for law in self.COMMON_TAX_LAWS if law in (search_text or user_question)]
         if not matched_laws:
             return ""
 
@@ -714,7 +723,7 @@ class TaxAdvisorEngine:
     # ------------------------------------------------------------------
     # 국세청 법령해석(질의회신/예규) 검색 - 선택 기능 (v1.3 추가)
     # ------------------------------------------------------------------
-    def search_nts_interpretations(self, user_question: str, max_results: int = 3) -> str:
+    def search_nts_interpretations(self, user_question: str, max_results: int = 3, preset_keywords: list = None) -> str:
         """
         국세청 법령해석(질의회신/예규) 목록을 검색하고, 검색된 안건에 대해
         Gemini의 Google Search grounding 기능으로 본문 내용을 보강 시도.
@@ -725,6 +734,21 @@ class TaxAdvisorEngine:
         - 본문은 Google 검색으로 "찾을 수 있으면" 가져오는 것이며, 이는 공식
           데이터가 아니라 검색 결과 기반 참고 정보임. 100% 정확성이 보장되지 않음.
         - 이 기능은 .env의 ENABLE_NTS_SEARCH=true 로 명시적으로 켜야만 작동함.
+
+        Parameters
+        ----------
+        user_question : str
+            사용자 질문 (Google Search grounding 단계에서 관련성 판단용으로 사용)
+        max_results : int
+            키워드 1개당 가져올 최대 검색 결과 수
+        preset_keywords : list[str], optional
+            이미 정해진 검색 키워드가 있으면 그대로 사용하고, 이 메서드 내부의
+            _extract_search_keywords 호출(Gemini 1회 호출)을 건너뜀.
+
+            2026-07-02 추가 이유: 꼬리질문 상황에서는 generate_guideline이 대화
+            맥락을 참고해 이미 적절한 키워드를 뽑아둔 경우가 있음(리서치 필요
+            여부와 키워드를 한 번에 판단하는 보조 호출 결과). 이 경우 여기서
+            키워드를 또 새로 추출할 필요가 없으므로, 중복 호출을 피함.
 
         Returns
         -------
@@ -743,7 +767,7 @@ class TaxAdvisorEngine:
         # (법제처 API는 OR 연산자가 없는 단순 문자열 매칭이므로, 한 번에 여러 단어를
         #  합쳐서 보내면 0건이 나옴. 대신 키워드별로 각각 검색을 호출해 결과를 모으는
         #  방식으로 OR 검색과 동일한 효과를 냄)
-        search_keywords = self._extract_search_keywords(user_question, max_keywords=3)
+        search_keywords = preset_keywords if preset_keywords else self._extract_search_keywords(user_question, max_keywords=3)
         if not search_keywords:
             return ""
 
@@ -826,6 +850,122 @@ Google 검색으로 찾아서, 찾은 내용만 정리해주세요.
         )
 
     # ------------------------------------------------------------------
+    # 꼬리질문 리서치 필요 여부 판단 (v1.8 신규, 2026-07-02)
+    # ------------------------------------------------------------------
+    def _assess_followup_research_need(self, user_question: str, thread_history: list) -> dict:
+        """
+        꼬리질문에 대해 새로운 법령/예규 검색이 필요한지 AI가 스스로 판단하게 하는 보조 호출.
+
+        배경 (흥준님 요청, 2026-07-02):
+        - 기존에는 fetch_law_context/search_nts_interpretations가 thread_history를
+          전혀 참고하지 않고, 그 턴에 입력된 질문 텍스트만으로 매번 새로 법령/예규를
+          검색했음. 첫 질문은 문장이 길고 키워드가 풍부해 검색이 잘 됐지만, 꼬리질문은
+          "그럼 세율은?"처럼 짧게 들어오는 경우가 많아 검색 키워드가 부족해지고,
+          결과적으로 법령 근거가 빈약한 채로 답변이 나가는 문제가 있었음.
+        - 사람 회계사가 일하는 방식과 같이 "이미 답변에서 확인한 근거가 있다면 다시
+          찾아보지 않고, 진짜 새로운 쟁점이 나올 때만 추가로 찾아본다"는 원칙을
+          고정된 규칙(예: 세목이 바뀌면 무조건 검색)이 아니라 AI 판단에 맡기기로 함
+          — 규칙 기반은 오작동 시 예측이 어렵고, 지금 시스템이 이미 여러 곳에서
+          구조화된 AI 판단(사실판단 체크리스트, 지식베이스 파일 추천 등)을 쓰는
+          방식과도 일관성이 있음.
+
+        Parameters
+        ----------
+        user_question : str
+            이번 턴의 새 질문(꼬리질문)
+        thread_history : list[dict]
+            지금까지의 대화 묶음 (각 항목 {"question": str, "answer": str}).
+            호출하는 쪽에서 비어있지 않을 때만 이 메서드를 호출해야 함.
+
+        Returns
+        -------
+        dict
+            {
+              "need_research": bool,   # 새 법령/예규 검색이 필요한지
+              "expanded_query": str,   # 법령명 매칭(fetch_law_context)에 쓸,
+                                        # 맥락이 보강된 질문 텍스트
+              "keywords": list[str],   # 국세청 법령해석 검색에 쓸 키워드(최대 3개)
+              "reason": str,           # 판단 이유 (로그용, 화면에는 노출 안 함)
+            }
+            호출/파싱 실패 시, 안전한 기본값(항상 검색 수행)으로 폴백함 —
+            "검색이 필요 없는데 한 번 더 했다"가 "검색이 필요한데 건너뛰었다"보다
+            훨씬 안전한 실패 방향이기 때문.
+        """
+        fallback = {
+            "need_research": True,
+            "expanded_query": user_question,
+            "keywords": [],
+            "reason": "판단 호출 실패 — 안전하게 기본값(검색 수행)으로 폴백",
+        }
+
+        history_lines = []
+        for i, turn in enumerate(thread_history, start=1):
+            history_lines.append(f"[이전 질의 {i}] {turn['question']}\n[이전 회신 {i}]\n{turn['answer']}")
+        history_text = "\n\n".join(history_lines)
+
+        assess_prompt = f"""당신은 세무 자문 시스템의 리서치 담당자입니다. 지금까지의 대화와 새
+꼬리질문을 보고, 이 꼬리질문에 답하기 위해 "새로운" 법령 조문이나 국세청 법령해석(예규)을
+추가로 찾아봐야 하는지 판단하세요.
+
+[판단 기준]
+- 꼬리질문이 이전 답변에서 이미 다룬 내용을 더 쉽게 설명해달라거나, 이미 나온 결론을
+  요약/정리해달라는 요청이라면 → 새 검색 불필요 (need_research: false)
+- 꼬리질문이 이전 답변에서 다루지 않은 새로운 세목, 다른 법령, 다른 거래유형, 구체적인
+  숫자/한도/절차 등 새로운 쟁점을 묻고 있다면 → 새 검색 필요 (need_research: true)
+- 판단이 애매하면 안전한 쪽(검색 필요)으로 판단하세요.
+
+[지금까지의 대화]
+{history_text}
+
+[새 꼬리질문]
+{user_question}
+
+[출력 형식 — 다른 설명 없이 이 JSON 형식만 출력하세요. 마크다운 코드블록 표시(```)도 쓰지 마세요]
+{{"need_research": true 또는 false, "expanded_query": "법령명 매칭에 쓸 수 있도록 이전 대화
+맥락을 반영해 이 꼬리질문이 실제로 묻는 바를 완전한 문장으로 풀어쓴 것", "keywords":
+["국세청 법령해석 검색에 쓸 핵심 용어, 최대 3개"], "reason": "5~20자 내외 판단 이유"}}
+"""
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=assess_prompt,
+                config=genai_types.GenerateContentConfig(temperature=0.1),
+            )
+            raw_text = response.text.strip() if response.candidates else ""
+        except Exception as e:
+            print(f"[경고] 꼬리질문 리서치 필요 여부 판단 호출 실패: {e}")
+            return fallback
+
+        if not raw_text:
+            return fallback
+
+        cleaned = raw_text.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```")[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+            cleaned = cleaned.strip()
+
+        try:
+            import json
+            parsed = json.loads(cleaned)
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"[경고] 꼬리질문 리서치 판단 결과 JSON 파싱 실패: {e} / 원본: {raw_text[:200]}")
+            return fallback
+
+        keywords = parsed.get("keywords") or []
+        if not isinstance(keywords, list):
+            keywords = []
+        keywords = [str(k).strip() for k in keywords if str(k).strip()][:3]
+
+        return {
+            "need_research": bool(parsed.get("need_research", True)),
+            "expanded_query": str(parsed.get("expanded_query") or user_question),
+            "keywords": keywords,
+            "reason": str(parsed.get("reason", "")),
+        }
+
+    # ------------------------------------------------------------------
     # 질의 응답 생성
     # ------------------------------------------------------------------
     def generate_guideline(self, user_question: str, thread_history: list = None) -> str:
@@ -851,8 +991,34 @@ Google 검색으로 찾아서, 찾은 내용만 정리해주세요.
             return "질문이 비어 있습니다. 세무 질의 내용을 입력해주세요."
 
         knowledge_text = self.load_knowledge_base()
-        law_context = self.fetch_law_context(user_question)
-        nts_context = self.search_nts_interpretations(user_question)
+
+        # ------------------------------------------------------------------
+        # 법령/예규 검색 — 꼬리질문이면 먼저 "새로 찾아볼 필요가 있는지" AI가 판단
+        #
+        # 설계 의도 (2026-07-02, 흥준님 요청 반영):
+        # - 첫 질문(thread_history 없음)은 기존과 동일하게 항상 검색 수행.
+        # - 꼬리질문(thread_history 있음)은 _assess_followup_research_need로 먼저
+        #   판단: 이미 이전 답변에서 다룬 내용이면 검색을 건너뛰고(불필요한 API
+        #   호출/비용 절감 + 짧은 꼬리질문 텍스트만으로 검색해 근거가 빈약해지는
+        #   문제 회피), 새로운 쟁점이면 대화 맥락이 반영된 검색어로 검색함.
+        # - 검색을 건너뛰어도 이전 턴의 법령/예규 근거는 thread_history를 통해
+        #   프롬프트에 이미 포함되어 있으므로(과거 회신 전문이 그대로 들어감),
+        #   근거가 완전히 사라지는 게 아니라 "이미 확보된 근거를 재사용"하는 것임.
+        # ------------------------------------------------------------------
+        if thread_history:
+            research_plan = self._assess_followup_research_need(user_question, thread_history)
+            if research_plan["need_research"]:
+                law_context = self.fetch_law_context(user_question, search_text=research_plan["expanded_query"])
+                nts_context = self.search_nts_interpretations(
+                    user_question, preset_keywords=research_plan["keywords"] or None
+                )
+            else:
+                print(f"[안내] 꼬리질문 판단: 새 법령/예규 검색 불필요 — {research_plan['reason']}")
+                law_context = ""
+                nts_context = ""
+        else:
+            law_context = self.fetch_law_context(user_question)
+            nts_context = self.search_nts_interpretations(user_question)
 
         # ------------------------------------------------------------------
         # 대화 흐름 블록 ("지금 무슨 대화를 하고 있는가" — 지식베이스와는 완전히 별개 레이어)

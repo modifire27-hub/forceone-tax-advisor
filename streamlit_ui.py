@@ -27,6 +27,7 @@ Windows 환경 기준으로 작성됨.
 
 import os
 import json
+import re
 import uuid
 from pathlib import Path
 from datetime import datetime
@@ -571,6 +572,9 @@ st.session_state.setdefault("backlog", [])
 st.session_state.setdefault("summary_doc", None)
 st.session_state.setdefault("summary_doc_turns_count", 0)
 st.session_state.setdefault("kb_confirm_target", None)
+# "확정 저장 실행" 성공 직후 st.rerun()으로 화면을 정리할 때, 성공 메시지가
+# rerun과 함께 사라지지 않도록 잠깐 담아두는 값 (아래에서 한 번 보여주고 비움)
+st.session_state.setdefault("_kb_last_saved_path", None)
 
 
 def render_copy_button(text: str, key: str, label: str = "📋 복사하기"):
@@ -579,9 +583,19 @@ def render_copy_button(text: str, key: str, label: str = "📋 복사하기"):
 
     Streamlit의 st.button은 서버(파이썬) 쪽에서 눌림 여부만 알 수 있을 뿐,
     브라우저 클립보드에 직접 접근할 방법이 없음. 클립보드 복사는 브라우저
-    JS의 navigator.clipboard API가 있어야만 가능하므로, 순수 HTML/JS를
-    components.html로 삽입해 처리함(서버 왕복 없이 클릭 즉시 브라우저에서
-    바로 실행됨).
+    JS가 있어야만 가능하므로, 순수 HTML/JS를 components.html로 삽입해
+    처리함(서버 왕복 없이 클릭 즉시 브라우저에서 바로 실행됨).
+
+    복사 방식은 두 단계로 시도함:
+    ① navigator.clipboard.writeText — 최신 API, 가장 깔끔하지만 이 버튼이
+       components.html의 iframe 안에서 실행되다 보니, 배포 환경에 따라
+       브라우저의 Permissions Policy가 iframe에는 클립보드 쓰기 권한을
+       기본적으로 내려주지 않아 조용히 실패하는 사례가 확인됨(실사용
+       테스트 — 버튼은 보이지만 클릭해도 복사가 안 되는 현상).
+    ② ①이 실패하면 즉시 document.execCommand('copy')로 대체 — 화면
+       밖에 숨겨진 textarea에 텍스트를 넣고 선택한 뒤 복사하는 오래된
+       방식이라 최신 API보다 지원 범위가 넓고, iframe 안에서도 별도
+       권한 없이 대부분 동작함.
 
     text는 json.dumps로 감싸 JS 문자열 리터럴로 안전하게 이스케이프함
     (텍스트 안에 따옴표·줄바꿈·백틱 등이 있어도 깨지지 않도록).
@@ -590,19 +604,14 @@ def render_copy_button(text: str, key: str, label: str = "📋 복사하기"):
     때는 반드시 서로 다른 값을 넘겨야 함(다른 위젯들과 동일한 패턴).
     """
     safe_text = json.dumps(text or "")
-    btn_id = f"pf_copy_btn_{key}"
+    safe_label = json.dumps(label)
+    safe_key = re.sub(r"[^0-9a-zA-Z_]", "_", str(key))
+    btn_id = f"pf_copy_btn_{safe_key}"
+    ta_id = f"pf_copy_ta_{safe_key}"
     html = f"""
     <div style="margin: 2px 0 12px;">
-      <button id="{btn_id}" onclick="
-        navigator.clipboard.writeText({safe_text}).then(function() {{
-          var btn = document.getElementById('{btn_id}');
-          btn.innerText = '✅ 복사됨';
-          setTimeout(function() {{ btn.innerText = {json.dumps(label)}; }}, 1500);
-        }}).catch(function(err) {{
-          var btn = document.getElementById('{btn_id}');
-          btn.innerText = '복사 실패 (직접 드래그해주세요)';
-        }});
-      " style="
+      <textarea id="{ta_id}" style="position:fixed; top:-9999px; left:-9999px; opacity:0;"></textarea>
+      <button id="{btn_id}" onclick="pfCopy_{safe_key}()" style="
         background-color: #0c2340;
         color: #e0b020;
         border: 1px solid #e0b020;
@@ -614,8 +623,45 @@ def render_copy_button(text: str, key: str, label: str = "📋 복사하기"):
         font-family: inherit;
       ">{label}</button>
     </div>
+    <script>
+      function pfCopy_{safe_key}() {{
+        var text = {safe_text};
+        var btn = document.getElementById('{btn_id}');
+
+        function onSuccess() {{
+          btn.innerText = '✅ 복사됨';
+          setTimeout(function() {{ btn.innerText = {safe_label}; }}, 1500);
+        }}
+        function onFail() {{
+          btn.innerText = '복사 실패 (직접 드래그해주세요)';
+          setTimeout(function() {{ btn.innerText = {safe_label}; }}, 2000);
+        }}
+        function fallbackCopy() {{
+          try {{
+            var ta = document.getElementById('{ta_id}');
+            ta.value = text;
+            ta.style.top = '0px';
+            ta.focus();
+            ta.select();
+            var ok = document.execCommand('copy');
+            ta.style.top = '-9999px';
+            if (ok) {{ onSuccess(); }} else {{ onFail(); }}
+          }} catch (e) {{
+            onFail();
+          }}
+        }}
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {{
+          navigator.clipboard.writeText(text).then(onSuccess).catch(fallbackCopy);
+        }} else {{
+          fallbackCopy();
+        }}
+      }}
+    </script>
     """
     components.html(html, height=44)
+
+
 
 
 def render_copyable_text(text: str, key: str, label: str = "📋 복사하기"):
@@ -998,7 +1044,6 @@ def render_confirm_to_kb_workspace():
                     confirmed_content=st.session_state[edited_key],
                     target_file=target_file,
                 )
-                st.success(f"지식베이스에 확정 저장되었습니다: {saved_path}")
 
                 pending_ts = st.session_state.get(f"{key_prefix}_pending_ts")
                 if pending_ts and engine.sheet_logger and engine.sheet_logger.enabled:
@@ -1014,6 +1059,18 @@ def render_confirm_to_kb_workspace():
                 st.session_state.pop(next_prompt_key, None)
                 st.session_state.pop(proceed_key, None)
                 st.session_state.pop(edited_key, None)
+
+                # 설계 의도 (복사 버튼 작업과 함께 수정): 기존에는 이 분기에
+                # st.rerun()이 없어서, 위에서 kb_confirm_target 등 세션 상태는
+                # 이미 정리됐는데도 화면(작업 공간, "새 주제 시작" 버튼 등)은
+                # 이번 스크립트 실행분의 이전 상태 그대로 남아있어 "화면이
+                # 멈춘 것처럼" 보였음(취소 버튼 쪽은 st.rerun()이 있어서
+                # 정상적으로 화면이 정리됐던 것과 비대칭이었음). st.rerun()을
+                # 걸면 이번에 만든 st.success 메시지가 그대로 사라지므로,
+                # 저장 경로를 세션에 잠깐 담아뒀다가 리런 직후 화면 상단에서
+                # 다시 보여주는 방식으로 처리함(아래 "저장 완료 배너" 참고).
+                st.session_state["_kb_last_saved_path"] = saved_path
+                st.rerun()
             else:
                 st.error("PIN이 일치하지 않습니다.")
         if cancelled:
@@ -1659,6 +1716,18 @@ def run_summary(turns):
         ),
     )
     return response.text
+
+
+# ----------------------------------------------------------------------
+# 지식베이스 확정 저장 완료 배너
+# ----------------------------------------------------------------------
+# render_confirm_to_kb_workspace()에서 저장 성공 직후 st.rerun()을 걸기
+# 때문에, 이번 스크립트 실행에서는 그 성공 메시지가 사라진 상태로 시작함.
+# 저장 경로를 세션에 잠깐 담아뒀던 값이 있으면 화면 맨 위에서 한 번 보여주고
+# 곧바로 비워서, 다음 리런부터는 다시 뜨지 않게 함(한 번만 보이는 배너).
+if st.session_state.get("_kb_last_saved_path"):
+    st.success(f"지식베이스에 확정 저장되었습니다: {st.session_state['_kb_last_saved_path']}")
+    st.session_state["_kb_last_saved_path"] = None
 
 
 # ----------------------------------------------------------------------

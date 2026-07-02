@@ -572,6 +572,12 @@ st.session_state.setdefault("backlog", [])
 st.session_state.setdefault("summary_doc", None)
 st.session_state.setdefault("summary_doc_turns_count", 0)
 st.session_state.setdefault("kb_confirm_target", None)
+# "저장 옵션"(사이드바) 위젯들의 기본값. 이 위젯들이 실제로 사이드바에서
+# 그려지기 전에(예: st.dialog 팝업 안에서 저장 버튼을 먼저 누르는 경우)
+# offer_downloads()가 이 값을 조회해도 NameError 없이 기본값을 쓰도록 함.
+st.session_state.setdefault("save_formats", ["md"])
+st.session_state.setdefault("use_custom_filename", False)
+st.session_state.setdefault("custom_filename", "")
 # "확정 저장 실행" 성공 직후 st.rerun()으로 화면을 정리할 때, 성공 메시지가
 # rerun과 함께 사라지지 않도록 잠깐 담아두는 값 (아래에서 한 번 보여주고 비움)
 st.session_state.setdefault("_kb_last_saved_path", None)
@@ -1608,17 +1614,26 @@ with st.sidebar:
         "결과는 파일로 만들어 다운로드 버튼으로 받습니다 "
         "(서버에 저장되지 않으며, 받은 파일은 사용자 컴퓨터에만 남습니다)."
     )
+    # 설계 의도 (2026-07-02 버그 수정): 기존에는 이 값들을 지역 변수로만
+    # 두고 offer_downloads()가 그 이름을 그대로 가져다 썼음. 사이드바 코드가
+    # 이 지점(스크립트의 뒷부분)까지 먼저 실행돼야만 값이 "존재"하는데,
+    # st.dialog로 띄우는 팝업(검색 기록 상세보기 등)은 호출되는 순간
+    # 그 아래 스크립트 실행을 멈춰버리는 특성이 있어서, 사이드바 위쪽의
+    # "검색 기록" 항목을 눌러 다이얼로그가 뜨면 이 아래 코드가 아직 실행 전
+    # 상태 → 다이얼로그 안에서 저장을 누르면 NameError가 났음. key=로
+    # session_state에 연결해두면 실행 순서와 무관하게 항상 값을 읽을 수 있음.
     save_formats = st.multiselect(
         "다운로드 형식 (여러 개 선택 가능)",
         options=["md", "docx", "pdf"],
         default=["md"],
         help="pdf는 서버에 한글 폰트가 없으면 생성되지 않을 수 있습니다. "
         "이 경우 md 또는 docx로 받아주세요.",
+        key="save_formats",
     )
-    use_custom_filename = st.checkbox("파일명 직접 지정", value=False)
+    use_custom_filename = st.checkbox("파일명 직접 지정", value=False, key="use_custom_filename")
     custom_filename = ""
     if use_custom_filename:
-        custom_filename = st.text_input("파일명 (확장자 제외)", value="")
+        custom_filename = st.text_input("파일명 (확장자 제외)", value="", key="custom_filename")
 
     st.divider()
     st.subheader("전체 초기화")
@@ -1654,10 +1669,17 @@ def offer_downloads(title: str, question: str, answer: str, filename_hint: str =
         같은 화면에 여러 개의 다운로드 버튼이 있을 때 Streamlit 위젯 키가
         충돌하지 않도록 구분하는 접두사 (예: 호출 위치 + 타임스탬프 조합).
     """
+    # 버그 수정 메모 (2026-07-02): 예전에는 이 값들을 사이드바 코드가 만든
+    # 지역 변수로 그냥 참조했는데, st.dialog 팝업(검색 기록 상세보기 등)
+    # 안에서 이 함수가 먼저 호출되면 사이드바 코드가 아직 실행 전이라
+    # NameError가 발생했음. 실행 순서와 무관한 st.session_state에서 읽도록
+    # 변경 (파일 상단의 setdefault로 항상 기본값이 보장되어 있음).
+    use_custom_filename = st.session_state.get("use_custom_filename", False)
+    custom_filename = st.session_state.get("custom_filename", "")
     filename = safe_filename(
         custom_filename.strip() if (use_custom_filename and custom_filename.strip()) else filename_hint
     )
-    formats = save_formats or ["md"]
+    formats = st.session_state.get("save_formats") or ["md"]
 
     built = build_export_bytes(title=title, question=question, response_md=answer, formats=formats)
 

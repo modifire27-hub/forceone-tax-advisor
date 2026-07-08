@@ -571,6 +571,7 @@ st.session_state.setdefault("backlog", [])
 st.session_state.setdefault("summary_doc", None)
 st.session_state.setdefault("summary_doc_turns_count", 0)
 st.session_state.setdefault("summary_doc_label", "")
+st.session_state.setdefault("summary_doc_source_ts", None)
 st.session_state.setdefault("kb_confirm_target", None)
 # "저장 옵션"(사이드바) 위젯들의 기본값. 이 위젯들이 실제로 사이드바에서
 # 그려지기 전에(예: st.dialog 팝업 안에서 저장 버튼을 먼저 누르는 경우)
@@ -765,7 +766,13 @@ def offer_downloads(title: str, question: str, answer: str, filename_hint: str =
             st.caption(f"⚠ {err}")
 
 
-def render_confirm_to_kb_button(question: str, answer: str, key_prefix: str, dialog_row_key: str = None):
+def render_confirm_to_kb_button(
+    question: str,
+    answer: str,
+    key_prefix: str,
+    dialog_row_key: str = None,
+    source_summary_timestamp: str = None,
+):
     """
     '지식베이스에 확정 저장' 버튼만 그림. 누르면 실제 작업 화면은 이 버튼이 있는
     좁은 위치(다이얼로그, 카드 등)가 아니라 메인 화면 하단의 전용 영역에서 펼쳐짐
@@ -791,6 +798,16 @@ def render_confirm_to_kb_button(question: str, answer: str, key_prefix: str, dia
       비워서 다음 리런부터 다이얼로그가 다시 열리지 않게 하고, st.rerun()으로
       명시적으로 다이얼로그를 닫음. 이후 메인 화면이 정상적으로 다시 그려지면서
       작업 공간이 나타남.
+
+    Parameters
+    ----------
+    source_summary_timestamp : str, optional
+        이 확정 대상이 '종합문서' 탭의 특정 행에서 온 것이면 그 행의 '일시' 값을
+        전달함(2026-07-09 추가). 확정이 완료되면 지식베이스에 새 항목을 추가하는
+        것과 별개로, 이 값을 이용해 원본 종합문서 행 자체도 확정된 최종본으로
+        덮어씀(update_summary) — 검증 전 원본과 확정된 최종본이 따로 남아
+        헷갈리는 것을 막기 위함. 개별 질문/답변 확정 시에는 전달하지 않음(그
+        경우는 검색기록과 지식베이스가 계속 별도로 남는 기존 방식 그대로 유지).
     """
     target_key = "kb_confirm_target"
     if st.button("지식베이스에 확정 저장", key=f"{key_prefix}_confirm_entry_btn"):
@@ -801,6 +818,7 @@ def render_confirm_to_kb_button(question: str, answer: str, key_prefix: str, dia
             # v1.6 추가 — 교차검증대기 구글시트 백업용 세션ID. 같은 작업에서
             # 나온 모든 라운드(1차,2차...)가 이 ID로 묶여 저장/복원/삭제됨.
             "crosscheck_session_id": str(uuid.uuid4()),
+            "source_summary_timestamp": source_summary_timestamp,
         }
         # 이전에 다른 항목을 검증/수정하던 상태가 남아있으면 깨끗하게 초기화.
         # edited_content 키 자체를 세션 상태에서 제거함(아직 확정 전이므로
@@ -881,7 +899,10 @@ def render_confirm_to_kb_workspace():
     if not crosscheck_session_id:
         crosscheck_session_id = str(uuid.uuid4())
         target["crosscheck_session_id"] = crosscheck_session_id
-        st.session_state["kb_confirm_target"] = target
+    # 종합문서 확정 시 원본 '종합문서' 탭 행을 덮어쓰기 위한 타임스탬프
+    # (개별 질문/답변 확정 시에는 None — render_confirm_to_kb_button 참고)
+    source_summary_timestamp = target.get("source_summary_timestamp")
+    st.session_state["kb_confirm_target"] = target
 
     st.divider()
     st.header("지식베이스 확정 저장 작업 공간")
@@ -1128,6 +1149,19 @@ def render_confirm_to_kb_workspace():
                     target_file=target_file,
                 )
 
+                # 종합문서 확정인 경우, 지식베이스에 새 항목을 추가하는 것과
+                # 별개로 원본 '종합문서' 탭 행 자체도 확정된 최종본으로
+                # 덮어씀 — 검증 전 원본과 확정본이 따로 남아 헷갈리지 않도록
+                # 함(2026-07-09, 사용자 확인 후 결정된 방침).
+                if source_summary_timestamp and engine.sheet_logger and engine.sheet_logger.enabled:
+                    engine.sheet_logger.update_summary(
+                        timestamp=source_summary_timestamp,
+                        new_summary_text=st.session_state[edited_key],
+                    )
+                # 이번에 확정한 항목의 배지를 즉시 "✅ 확정됨"으로 바꾸기 위한
+                # 세션 플래그. 화면에 종합문서를 표시하는 곳에서 참고함.
+                st.session_state[f"{key_prefix}_kb_confirmed"] = True
+
                 pending_ts = st.session_state.get(f"{key_prefix}_pending_ts")
                 if pending_ts and engine.sheet_logger and engine.sheet_logger.enabled:
                     engine.sheet_logger.delete_pending_verification(pending_ts)
@@ -1280,6 +1314,12 @@ def show_summary_log_dialog():
         f"{row.get('사용자구분', '')}"
     )
     dialog_key_base = f"sdialog_{row.get('일시', '')}".replace(" ", "_").replace(":", "")
+    # 구글시트 '확정여부' 컬럼을 그대로 신뢰함 — 세션 상태가 아니라 시트 값을
+    # 기준으로 판단하므로, 다른 브라우저/다른 사람이 확정한 경우에도 정확함.
+    if row.get("확정여부") == "확정됨" or st.session_state.get(f"{dialog_key_base}_kb_confirmed"):
+        st.success("✅ 지식베이스에 확정된 문서입니다.")
+    else:
+        st.warning("⚠️ 아직 지식베이스에 확정되지 않은 AI 생성 문서입니다. 검증 절차를 거치지 않아 오류가 있을 수 있습니다.")
     render_copyable_text(summary_text, key=f"{dialog_key_base}_summary")
     st.divider()
 
@@ -1307,6 +1347,7 @@ def show_summary_log_dialog():
                 answer=summary_text,
                 key_prefix=dialog_key_base,
                 dialog_row_key="_dialog_summary_row",
+                source_summary_timestamp=row.get("일시", ""),
             )
 
     with col3:
@@ -1656,8 +1697,9 @@ with st.sidebar:
     st.subheader("종합 문서 기록")
     st.caption(
         "여러 질문을 묶어 재구성한 종합 문서 기록입니다. "
-        "'종합 문서 저장' 버튼을 직접 눌렀을 때만 여기에 남습니다 "
-        "(개별 질문 기록과는 별도 탭에 저장되어 섞이지 않습니다)."
+        "'종합 문서 생성' 시점에 자동으로 여기에 남습니다 "
+        "(개별 질문 기록과는 별도 탭에 저장되어 섞이지 않습니다). "
+        "✅ 확정됨 표시가 없으면 검증 절차를 거치지 않은 AI 생성 문서이니 참고하세요."
     )
     if engine.sheet_logger and engine.sheet_logger.enabled:
         n_summaries = st.slider(
@@ -1673,8 +1715,9 @@ with st.sidebar:
         if loaded_summaries:
             st.caption(f"{len(loaded_summaries)}건 표시")
             for idx, row in enumerate(loaded_summaries):
+                badge = "✅ " if row.get("확정여부") == "확정됨" else "⚠️ "
                 label = (
-                    f"{row.get('일시', '')} | 질의 {row.get('포함된질의건수', '?')}건 | "
+                    f"{badge}{row.get('일시', '')} | 질의 {row.get('포함된질의건수', '?')}건 | "
                     f"{row.get('종합문서요약', '')[:30]}"
                 )
                 if st.button(label, key=f"summary_open_{idx}", use_container_width=True):
@@ -1995,14 +2038,22 @@ if st.session_state.current_thread:
         # 답변 생성 즉시 자동 기록되는 것과 동일한 방식으로 통일하기 위함.
         # (이전에는 "종합 문서 저장" 버튼을 직접 눌렀을 때만 기록했었음)
         if engine.sheet_logger and engine.sheet_logger.enabled:
-            engine.sheet_logger.log_summary(
+            st.session_state.summary_doc_source_ts = engine.sheet_logger.log_summary(
                 turns_count=st.session_state.summary_doc_turns_count,
                 summary_text=st.session_state.summary_doc,
                 user_type=user_type,
             )
+        else:
+            st.session_state.summary_doc_source_ts = None
+        # 새로 생성한 문서이므로 이전 확정 배지는 초기화(아직 확정 전 상태)
+        st.session_state.pop("summary_cur_kb_confirmed", None)
 
     if st.session_state.summary_doc:
         st.markdown("### 종합 문서 결과")
+        if st.session_state.get("summary_cur_kb_confirmed"):
+            st.success("✅ 지식베이스에 확정된 문서입니다.")
+        else:
+            st.warning("⚠️ 아직 지식베이스에 확정되지 않은 AI 생성 문서입니다. 검증 절차를 거치지 않아 오류가 있을 수 있습니다.")
         render_copyable_text(st.session_state.summary_doc, key="copy_summary_cur")
         save_col, kb_col = st.columns([1, 1.4])
         with save_col:
@@ -2030,6 +2081,7 @@ if st.session_state.current_thread:
                     question=st.session_state.get("summary_doc_label", "종합 문서"),
                     answer=st.session_state.summary_doc,
                     key_prefix="summary_cur",
+                    source_summary_timestamp=st.session_state.get("summary_doc_source_ts"),
                 )
 else:
     st.info("새 질문을 입력하면 여기서 대화가 시작됩니다.")
@@ -2064,13 +2116,20 @@ if st.session_state.backlog:
                         st.session_state[backlog_summary_key] = summary_text
                         # 종합 문서는 생성 시점에 자동으로 구글 시트(종합문서 탭)에 기록.
                         if engine.sheet_logger and engine.sheet_logger.enabled:
-                            engine.sheet_logger.log_summary(
+                            st.session_state[f"{backlog_summary_key}_source_ts"] = engine.sheet_logger.log_summary(
                                 turns_count=len(bundle["turns"]),
                                 summary_text=summary_text,
                                 user_type=user_type,
                             )
+                        else:
+                            st.session_state[f"{backlog_summary_key}_source_ts"] = None
+                        st.session_state.pop(f"{backlog_summary_key}_kb_confirmed", None)
 
                     if st.session_state.get(backlog_summary_key):
+                        if st.session_state.get(f"{backlog_summary_key}_kb_confirmed"):
+                            st.success("✅ 지식베이스에 확정된 문서입니다.")
+                        else:
+                            st.warning("⚠️ 아직 지식베이스에 확정되지 않은 AI 생성 문서입니다. 검증 절차를 거치지 않아 오류가 있을 수 있습니다.")
                         render_copyable_text(st.session_state[backlog_summary_key], key=f"{backlog_summary_key}_copy_text")
                         save_show_key = f"{backlog_summary_key}_save_show"
                         if st.button("이 종합 문서 저장", key=f"{backlog_summary_key}_save_btn"):
@@ -2093,6 +2152,7 @@ if st.session_state.backlog:
                                 ),
                                 answer=st.session_state[backlog_summary_key],
                                 key_prefix=backlog_summary_key,
+                                source_summary_timestamp=st.session_state.get(f"{backlog_summary_key}_source_ts"),
                             )
                 with col2:
                     if st.button("이 묶음 삭제", key=f"delete_backlog_{b_idx}"):
@@ -2115,11 +2175,14 @@ if st.session_state.backlog:
             )
         # "현재 대화 종합"과 동일하게, 생성 시점에 자동으로 구글 시트에 기록.
         if engine.sheet_logger and engine.sheet_logger.enabled:
-            engine.sheet_logger.log_summary(
+            st.session_state.summary_doc_source_ts = engine.sheet_logger.log_summary(
                 turns_count=st.session_state.summary_doc_turns_count,
                 summary_text=st.session_state.summary_doc,
                 user_type=user_type,
             )
+        else:
+            st.session_state.summary_doc_source_ts = None
+        st.session_state.pop("summary_cur_kb_confirmed", None)
         st.rerun()
 
 

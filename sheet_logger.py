@@ -39,7 +39,13 @@ class SheetLogger:
     # - 개별 질의응답(HEADER, sheet1)과는 별도 탭에 저장하여, "개별 답변 로그"와
     #   "여러 질문을 묶어 재구성한 종합 문서"가 한 시트에 섞이지 않도록 구분함.
     SUMMARY_SHEET_NAME = "종합문서"
-    SUMMARY_HEADER = ["일시", "포함된질의건수", "종합문서요약", "종합문서전체", "사용자구분"]
+    # "확정여부" 컬럼 (2026-07-09 추가): 이 종합 문서가 지식베이스에 확정
+    # 저장되었는지 표시. 값은 "" (미확정) 또는 "확정됨". 미확정 상태는 검증
+    # 절차를 거치지 않은 AI 생성 문서이므로 화면에 오류 가능성을 안내하고,
+    # 확정되면 update_summary()가 이 컬럼과 본문 내용을 함께 최종본으로
+    # 덮어써서 원본(수정 전) 내용은 남기지 않음 — 지식베이스 확정 문서와
+    # 원본 로그가 따로 보관되어 헷갈리는 것을 방지하기 위함.
+    SUMMARY_HEADER = ["일시", "포함된질의건수", "종합문서요약", "종합문서전체", "사용자구분", "확정여부"]
 
     # 지식베이스 탭(워크시트) 이름 및 헤더
     # 설계 의도 (2026-06-25 추가):
@@ -186,7 +192,17 @@ class SheetLogger:
 
             existing_summary_header = self.summary_sheet.row_values(1)
             if existing_summary_header != self.SUMMARY_HEADER:
-                self.summary_sheet.insert_row(self.SUMMARY_HEADER, 1)
+                if existing_summary_header and self.SUMMARY_HEADER[: len(existing_summary_header)] == existing_summary_header:
+                    # 기존 헤더가 새 헤더의 앞부분과 완전히 일치 = 뒤에 컬럼만
+                    # 추가된 경우("확정여부" 추가가 정확히 이 상황임). 이때
+                    # insert_row로 헤더 행을 새로 끼워 넣으면 기존 헤더 행이
+                    # 데이터 행으로 밀려 내려가 시트가 망가지므로, 빈 헤더
+                    # 셀만 채워 넣는 안전한 방식을 씀(기존 데이터 행은 전혀
+                    # 건드리지 않음).
+                    for col_idx in range(len(existing_summary_header) + 1, len(self.SUMMARY_HEADER) + 1):
+                        self.summary_sheet.update_cell(1, col_idx, self.SUMMARY_HEADER[col_idx - 1])
+                else:
+                    self.summary_sheet.insert_row(self.SUMMARY_HEADER, 1)
 
             # 지식베이스 탭 확인/생성 (없으면 새로 만듦)
             try:
@@ -343,14 +359,12 @@ class SheetLogger:
     # ------------------------------------------------------------------
     # 종합문서 전용 기록/조회 (개별 질의응답과는 별도 탭에 저장)
     # ------------------------------------------------------------------
-    def log_summary(self, turns_count: int, summary_text: str, user_type: str = "직원") -> bool:
+    def log_summary(self, turns_count: int, summary_text: str, user_type: str = "직원") -> str:
         """
         종합 문서 1건을 '종합문서' 탭에 한 행으로 추가.
 
-        주의: 개별 질의응답(log 메서드)과는 달리, 이 메서드는 사용자가 화면에서
-        "종합 문서 저장" 버튼을 직접 눌렀을 때만 호출됨 (자동 기록 아님).
-        매번 종합 문서를 만들어볼 때마다 기록하면 시험적으로 눌러본 것까지 다 쌓여
-        실제로 저장해 둔 것과 구분이 안 되기 때문.
+        주의: 종합 문서를 "생성"하는 시점에 자동으로 호출됨(2026-06-25 변경 —
+        개별 질문이 답변 생성 즉시 자동 기록되는 것과 동일한 방식으로 통일).
 
         Parameters
         ----------
@@ -363,23 +377,26 @@ class SheetLogger:
 
         Returns
         -------
-        bool
-            성공 여부 (실패해도 예외를 던지지 않음)
+        str | None
+            성공 시 이 행의 '일시' 값(타임스탬프 문자열) — 이후 지식베이스
+            확정 시 update_summary()로 이 행을 찾아 최종본으로 덮어쓰는 데
+            사용됨(2026-07-09 추가 — 이전에는 bool만 반환하고 호출부에서
+            타임스탬프를 알 방법이 없었음). 실패하거나 비활성 상태면 None.
         """
         if not self.enabled or self.summary_sheet is None:
-            return False
+            return None
 
         try:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             summary_preview = summary_text[:100].replace("\n", " ") + ("..." if len(summary_text) > 100 else "")
             self.summary_sheet.append_row(
-                [timestamp, turns_count, summary_preview, summary_text, user_type],
+                [timestamp, turns_count, summary_preview, summary_text, user_type, ""],
                 value_input_option="RAW",
             )
-            return True
+            return timestamp
         except Exception as e:
             print(f"[경고] 종합문서 시트 로깅 실패 (저장 자체에는 영향 없음): {e}")
-            return False
+            return None
 
     def get_recent_summaries(self, limit: int = 20) -> list:
         """
@@ -399,6 +416,54 @@ class SheetLogger:
         except Exception as e:
             print(f"[경고] 종합문서 시트 조회 실패: {e}")
             return []
+
+    def update_summary(self, timestamp: str, new_summary_text: str) -> bool:
+        """
+        '종합문서' 탭의 행 1건을 지식베이스 확정 시점의 최종본 내용으로 덮어씀.
+
+        설계 의도 (2026-07-09 추가):
+        - 종합 문서를 지식베이스에 확정하면(render_confirm_to_kb_workspace),
+          검증·수정을 거쳐 원래 생성 당시 내용과 달라지는 경우가 흔함. 이때
+          원본(수정 전) 로그와 확정된 최종본을 둘 다 남겨두면, 나중에 "종합
+          문서 기록"에서 원본을 열어본 사람이 이미 정정된 내용을 모른 채
+          옛 버전을 최종본으로 오해할 수 있음.
+        - 해결: 확정 완료 시 원본 행 자체를 최종본 내용으로 덮어써서 하나만
+          남김(원본 이력은 보존하지 않음 — 사용자 확인 후 결정된 방침).
+          '확정여부' 컬럼도 함께 "확정됨"으로 표시함.
+        - delete_summary와 동일하게 '일시' 하나로 행을 식별함.
+
+        Parameters
+        ----------
+        timestamp : str
+            덮어쓸 행의 '일시' 값 (log_summary가 반환한 값을 그대로 사용)
+        new_summary_text : str
+            지식베이스 확정 시점의 최종(검증/수정 완료) 내용
+
+        Returns
+        -------
+        bool
+            갱신 성공 여부 (해당 행을 못 찾은 경우도 False)
+        """
+        if not self.enabled or self.summary_sheet is None:
+            return False
+
+        try:
+            all_values = self.summary_sheet.get_all_values()
+            for row_idx, row in enumerate(all_values[1:], start=2):
+                if len(row) >= 1 and row[0] == timestamp:
+                    preview = new_summary_text[:100].replace("\n", " ") + (
+                        "..." if len(new_summary_text) > 100 else ""
+                    )
+                    # 종합문서요약(3), 종합문서전체(4), 확정여부(6) 컬럼만 갱신.
+                    # 일시/포함된질의건수/사용자구분(1,2,5)은 원본 그대로 둠.
+                    self.summary_sheet.update_cell(row_idx, 3, preview)
+                    self.summary_sheet.update_cell(row_idx, 4, new_summary_text)
+                    self.summary_sheet.update_cell(row_idx, 6, "확정됨")
+                    return True
+            return False
+        except Exception as e:
+            print(f"[경고] 종합문서 시트 갱신 실패: {e}")
+            return False
 
     def delete_summary(self, timestamp: str) -> bool:
         """

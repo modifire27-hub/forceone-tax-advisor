@@ -116,6 +116,29 @@ class SheetLogger:
     ACCOUNT_SHEET_NAME = "계정설정"
     ACCOUNT_HEADER = ["역할", "비밀번호해시"]
 
+    def _setup_tab(self, name: str, fn) -> None:
+        """
+        탭 하나의 설정(조회/생성 + 헤더 동기화)을 실행하되, 예외가 나도
+        삼켜서 나머지 탭 설정과 self.enabled=True 처리가 계속 진행되도록 함.
+        실패하면 self.tab_errors[name]에 원인을 남김(진단 정보 화면에서 확인용).
+        """
+        try:
+            fn()
+        except Exception as e:
+            msg = f"[{type(e).__name__}] {e}"
+            self.tab_errors[name] = msg
+            print(f"[경고] 구글시트 '{name}' 탭 설정 실패(다른 탭/기능에는 영향 없음): {msg}")
+
+    def _init_worksheet(self, spreadsheet, attr_name: str, sheet_name: str, header: list, rows: int) -> None:
+        """탭을 조회하거나(없으면) 새로 만들고, 헤더를 동기화해 self.<attr_name>에 설정."""
+        import gspread
+        try:
+            worksheet = spreadsheet.worksheet(sheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=rows, cols=len(header))
+        self._sync_header(worksheet, header)
+        setattr(self, attr_name, worksheet)
+
     def _sync_header(self, worksheet, target_header: list) -> None:
         """
         워크시트 1행의 헤더를 target_header에 맞춤. 헤더가 아예 없거나 구조가
@@ -163,6 +186,10 @@ class SheetLogger:
         self.crosscheck_sheet = None
         self.account_sheet = None
         self.error_message = ""
+        # 탭별 개별 오류 기록 (2026-07-09 추가) — 탭 하나가 실패해도 전체
+        # 연동은 계속 살아있게 하되, 어떤 탭에서 무슨 문제가 있었는지는
+        # 진단 정보 화면에서 확인할 수 있게 남겨둠. {탭속성명: 오류메시지}
+        self.tab_errors = {}
 
         sheet_id = (sheet_id or os.getenv("GOOGLE_SHEET_ID", "")).strip()
         credentials_path = (credentials_path or os.getenv("GOOGLE_CREDENTIALS_PATH", "")).strip()
@@ -197,69 +224,41 @@ class SheetLogger:
             spreadsheet = gc.open_by_key(sheet_id)
             self.sheet = spreadsheet.sheet1
 
-            # 헤더가 없으면 추가 (또는 컬럼이 뒤에 추가된 경우 안전하게 보강)
-            self._sync_header(self.sheet, self.HEADER)
+            # 설계 의도 (2026-07-09 추가 — 탭별 장애 격리):
+            # 예전에는 모든 탭의 "확인/생성 + 헤더 동기화"가 이 __init__ 전체를
+            # 감싸는 하나의 try/except 안에 있었음. 그래서 탭 하나(예: 헤더에
+            # 새 컬럼을 추가하는 마이그레이션)에서 예외가 나면, 그 뒤에 있는
+            # 탭들(계정설정 포함!)은 아예 설정을 시도조차 못 하고 self.enabled도
+            # False로 남아 전체 구글시트 연동이 통째로 꺼지는 문제가 있었음.
+            # 로그인 비밀번호가 계정설정 탭 기반인데, 연동이 꺼지면 그 탭을
+            # 아예 못 보고 예전 방식(.env의 APP_PASSWORD)으로 조용히 폴백해
+            # "비밀번호가 안 맞는" 것처럼 보이는 원인이 됐었음(2026-07-09 실사용
+            # 중 발견).
+            # 해결: 탭마다 각자 try/except로 감싸 서로 독립시킴. 한 탭이
+            # 실패해도 그 탭의 sheet 속성만 None으로 남고(관련 기능만 조용히
+            # 비활성), 나머지 탭과 self.enabled=True는 정상적으로 진행됨.
+            self._setup_tab("sheet", lambda: self._sync_header(self.sheet, self.HEADER))
 
-            # 종합문서 탭 확인/생성 (없으면 새로 만듦)
-            try:
-                self.summary_sheet = spreadsheet.worksheet(self.SUMMARY_SHEET_NAME)
-            except gspread.exceptions.WorksheetNotFound:
-                self.summary_sheet = spreadsheet.add_worksheet(
-                    title=self.SUMMARY_SHEET_NAME, rows=200, cols=len(self.SUMMARY_HEADER)
-                )
+            self._setup_tab("summary_sheet", lambda: self._init_worksheet(
+                spreadsheet, "summary_sheet", self.SUMMARY_SHEET_NAME, self.SUMMARY_HEADER, rows=200
+            ))
+            self._setup_tab("knowledge_sheet", lambda: self._init_worksheet(
+                spreadsheet, "knowledge_sheet", self.KNOWLEDGE_SHEET_NAME, self.KNOWLEDGE_HEADER, rows=500
+            ))
+            self._setup_tab("pending_sheet", lambda: self._init_worksheet(
+                spreadsheet, "pending_sheet", self.PENDING_SHEET_NAME, self.PENDING_HEADER, rows=50
+            ))
+            self._setup_tab("crosscheck_sheet", lambda: self._init_worksheet(
+                spreadsheet, "crosscheck_sheet", self.CROSSCHECK_SHEET_NAME, self.CROSSCHECK_HEADER, rows=50
+            ))
+            self._setup_tab("account_sheet", lambda: self._init_worksheet(
+                spreadsheet, "account_sheet", self.ACCOUNT_SHEET_NAME, self.ACCOUNT_HEADER, rows=10
+            ))
 
-            self._sync_header(self.summary_sheet, self.SUMMARY_HEADER)
-
-            # 지식베이스 탭 확인/생성 (없으면 새로 만듦)
-            try:
-                self.knowledge_sheet = spreadsheet.worksheet(self.KNOWLEDGE_SHEET_NAME)
-            except gspread.exceptions.WorksheetNotFound:
-                self.knowledge_sheet = spreadsheet.add_worksheet(
-                    title=self.KNOWLEDGE_SHEET_NAME, rows=500, cols=len(self.KNOWLEDGE_HEADER)
-                )
-
-            existing_knowledge_header = self.knowledge_sheet.row_values(1)
-            if existing_knowledge_header != self.KNOWLEDGE_HEADER:
-                self.knowledge_sheet.insert_row(self.KNOWLEDGE_HEADER, 1)
-
-            # 검증대기 탭 확인/생성 (없으면 새로 만듦)
-            try:
-                self.pending_sheet = spreadsheet.worksheet(self.PENDING_SHEET_NAME)
-            except gspread.exceptions.WorksheetNotFound:
-                self.pending_sheet = spreadsheet.add_worksheet(
-                    title=self.PENDING_SHEET_NAME, rows=50, cols=len(self.PENDING_HEADER)
-                )
-
-            existing_pending_header = self.pending_sheet.row_values(1)
-            if existing_pending_header != self.PENDING_HEADER:
-                self.pending_sheet.insert_row(self.PENDING_HEADER, 1)
-
-            # 교차검증대기 탭 확인/생성 (없으면 새로 만듦)
-            try:
-                self.crosscheck_sheet = spreadsheet.worksheet(self.CROSSCHECK_SHEET_NAME)
-            except gspread.exceptions.WorksheetNotFound:
-                self.crosscheck_sheet = spreadsheet.add_worksheet(
-                    title=self.CROSSCHECK_SHEET_NAME, rows=50, cols=len(self.CROSSCHECK_HEADER)
-                )
-
-            existing_crosscheck_header = self.crosscheck_sheet.row_values(1)
-            if existing_crosscheck_header != self.CROSSCHECK_HEADER:
-                self.crosscheck_sheet.insert_row(self.CROSSCHECK_HEADER, 1)
-
-            # 계정설정 탭 확인/생성 (없으면 새로 만듦)
-            try:
-                self.account_sheet = spreadsheet.worksheet(self.ACCOUNT_SHEET_NAME)
-            except gspread.exceptions.WorksheetNotFound:
-                self.account_sheet = spreadsheet.add_worksheet(
-                    title=self.ACCOUNT_SHEET_NAME, rows=10, cols=len(self.ACCOUNT_HEADER)
-                )
-
-            existing_account_header = self.account_sheet.row_values(1)
-            if existing_account_header != self.ACCOUNT_HEADER:
-                self.account_sheet.insert_row(self.ACCOUNT_HEADER, 1)
-
+            # 핵심 연결(스프레드시트 접근, 시트1)만 되면 연동은 "활성"으로 봄 —
+            # 개별 탭 하나가 실패해도 나머지 기능은 정상 동작해야 하므로.
             self.enabled = True
-            self.error_message = ""  # 성공했으므로 명시적으로 비움
+            self.error_message = self.error_message or ""  # 탭별 오류가 있어도 여기서 지우지 않음
         except ImportError as e:
             self.error_message = f"[ImportError] gspread/google-auth 패키지 문제: {e}"
             print(f"[경고] 구글 시트 로깅 비활성화: {self.error_message}")

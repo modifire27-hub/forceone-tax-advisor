@@ -1256,7 +1256,17 @@ def show_summary_log_dialog():
     """
     사이드바 '종합 문서 기록'에서 항목을 클릭하면 뜨는 모달 팝업.
     종합 문서 전체 내용을 보여주고, 다시 파일로 저장할 수 있음.
-    (종합 문서는 여러 질문을 재구성한 2차 가공물이므로 지식베이스 확정 대상에서는 제외)
+
+    설계 변경 (종합문서 지식베이스 확정 기능 추가와 함께):
+    - 예전에는 "종합 문서는 여러 질문을 재구성한 2차 가공물이므로 지식베이스
+      확정 대상에서는 제외"하는 방침이었으나, 이후 오히려 "꼬리질문으로 정정된
+      최종 결론이 반영된 종합 문서가 개별 답변보다 지식베이스 확정에 더
+      적합하다"는 방향으로 바뀌었음. 현재 대화 화면의 종합 문서에는 이미 확정
+      버튼이 붙어 있는데, 과거 검색 기록(구글시트 '종합문서' 탭)에서 불러온
+      종합 문서에는 빠져 있어 비대칭이었던 것을 여기서 맞춤.
+    - show_log_dialog(검색 기록 상세보기)와 동일한 패턴으로
+      render_confirm_to_kb_button을 추가하고, dialog_row_key를 넘겨 다이얼로그가
+      안전하게 닫히고 메인 화면 작업 공간으로 넘어가도록 함.
     """
     row = st.session_state.get("_dialog_summary_row")
     if not row:
@@ -1273,7 +1283,7 @@ def show_summary_log_dialog():
     render_copyable_text(summary_text, key=f"{dialog_key_base}_summary")
     st.divider()
 
-    col1, col2 = st.columns([1, 1])
+    col1, col2, col3 = st.columns([1, 1.4, 1])
     with col1:
         save_show_key = f"{dialog_key_base}_save_show"
         if st.button("이 종합 문서 다시 저장", key=f"{dialog_key_base}_save"):
@@ -1288,6 +1298,18 @@ def show_summary_log_dialog():
             )
 
     with col2:
+        if is_admin:
+            render_confirm_to_kb_button(
+                question=(
+                    f"[종합문서] {row.get('일시', '')} 종합 "
+                    f"(포함된 질의 {row.get('포함된질의건수', '?')}건)"
+                ),
+                answer=summary_text,
+                key_prefix=dialog_key_base,
+                dialog_row_key="_dialog_summary_row",
+            )
+
+    with col3:
         # 종합 문서 삭제 — 검색 기록 삭제와 동일하게 회계사 확정 PIN으로 보호함.
         delete_confirm_key = f"{dialog_key_base}_show_delete_confirm"
         if st.button("이 종합 문서 삭제", key=f"{dialog_key_base}_delete_btn"):

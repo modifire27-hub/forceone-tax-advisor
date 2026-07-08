@@ -570,6 +570,7 @@ st.session_state.setdefault("backlog", [])
 
 st.session_state.setdefault("summary_doc", None)
 st.session_state.setdefault("summary_doc_turns_count", 0)
+st.session_state.setdefault("summary_doc_label", "")
 st.session_state.setdefault("kb_confirm_target", None)
 # "저장 옵션"(사이드바) 위젯들의 기본값. 이 위젯들이 실제로 사이드바에서
 # 그려지기 전에(예: st.dialog 팝업 안에서 저장 버튼을 먼저 누르는 경우)
@@ -1960,6 +1961,13 @@ if st.session_state.current_thread:
         with st.spinner("지금까지의 대화를 종합하는 중입니다..."):
             st.session_state.summary_doc = run_summary(st.session_state.current_thread)
             st.session_state.summary_doc_turns_count = len(st.session_state.current_thread)
+            # 지식베이스 확정 저장 시 "질문" 자리에 대신 표시할 라벨.
+            # 종합 문서는 여러 질문을 묶은 것이라 단일 질문이 없으므로,
+            # 첫 질문을 짧게 잘라 대표 제목처럼 사용함(get_thread_label과 동일 방식).
+            st.session_state.summary_doc_label = (
+                f"[종합문서] {get_thread_label(st.session_state.current_thread)} "
+                f"외 {st.session_state.summary_doc_turns_count}건 종합"
+            )
         # 설계 의도 (2026-06-25 변경): 종합 문서는 '저장' 버튼을 누를 때가 아니라
         # '생성'하는 시점에 자동으로 구글 시트(종합문서 탭)에 기록함. 개별 질문이
         # 답변 생성 즉시 자동 기록되는 것과 동일한 방식으로 통일하기 위함.
@@ -1974,17 +1982,33 @@ if st.session_state.current_thread:
     if st.session_state.summary_doc:
         st.markdown("### 종합 문서 결과")
         render_copyable_text(st.session_state.summary_doc, key="copy_summary_cur")
-        save_show_key = "save_summary_cur_show"
-        if st.button("종합 문서 저장", key="save_summary_cur"):
-            st.session_state[save_show_key] = True
-        if st.session_state.get(save_show_key):
-            offer_downloads(
-                title="세무질의 종합 자문 문서",
-                question="",
-                answer=st.session_state.summary_doc,
-                filename_hint=f"종합자문_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                key_prefix="save_summary_cur",
-            )
+        save_col, kb_col = st.columns([1, 1.4])
+        with save_col:
+            save_show_key = "save_summary_cur_show"
+            if st.button("종합 문서 저장", key="save_summary_cur"):
+                st.session_state[save_show_key] = True
+            if st.session_state.get(save_show_key):
+                offer_downloads(
+                    title="세무질의 종합 자문 문서",
+                    question="",
+                    answer=st.session_state.summary_doc,
+                    filename_hint=f"종합자문_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                    key_prefix="save_summary_cur",
+                )
+        with kb_col:
+            # 설계 의도 (종합문서 지식베이스 확정 기능, 신규):
+            # 개별 답변 각각을 확정 저장하기보다, 꼬리질문을 거치며 정정된
+            # 최종 결론이 반영된 종합 문서 하나를 확정하는 편이 지식베이스
+            # 품질에 더 유리하다는 판단에 따라 추가함(개별 확정 버튼과 동일한
+            # render_confirm_to_kb_button/workspace를 그대로 재사용 —
+            # question/answer가 순수 텍스트이기만 하면 검증·수정·저장 흐름은
+            # 개별 답변이든 종합 문서든 동일하게 동작함).
+            if is_admin:
+                render_confirm_to_kb_button(
+                    question=st.session_state.get("summary_doc_label", "종합 문서"),
+                    answer=st.session_state.summary_doc,
+                    key_prefix="summary_cur",
+                )
 else:
     st.info("새 질문을 입력하면 여기서 대화가 시작됩니다.")
 
@@ -2037,6 +2061,17 @@ if st.session_state.backlog:
                                 filename_hint=f"종합자문_{bundle['started_at'].replace('-', '').replace(':', '').replace(' ', '_')}",
                                 key_prefix=backlog_summary_key,
                             )
+                        # 이전 대화 묶음의 종합 문서도 현재 대화 종합과 동일하게
+                        # 지식베이스 확정 저장 가능하도록 함.
+                        if is_admin:
+                            render_confirm_to_kb_button(
+                                question=(
+                                    f"[종합문서] {get_thread_label(bundle['turns'])} "
+                                    f"외 {len(bundle['turns'])}건 종합"
+                                ),
+                                answer=st.session_state[backlog_summary_key],
+                                key_prefix=backlog_summary_key,
+                            )
                 with col2:
                     if st.button("이 묶음 삭제", key=f"delete_backlog_{b_idx}"):
                         st.session_state.backlog.pop(b_idx)
@@ -2052,6 +2087,10 @@ if st.session_state.backlog:
             all_turns.extend(st.session_state.current_thread)
             st.session_state.summary_doc = run_summary(all_turns)
             st.session_state.summary_doc_turns_count = len(all_turns)
+            st.session_state.summary_doc_label = (
+                f"[종합문서] {get_thread_label(all_turns)} "
+                f"외 {st.session_state.summary_doc_turns_count}건 종합 (전체)"
+            )
         # "현재 대화 종합"과 동일하게, 생성 시점에 자동으로 구글 시트에 기록.
         if engine.sheet_logger and engine.sheet_logger.enabled:
             engine.sheet_logger.log_summary(

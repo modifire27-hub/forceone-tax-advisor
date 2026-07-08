@@ -33,7 +33,7 @@ from datetime import datetime
 class SheetLogger:
     """구글 스프레드시트 로깅 클라이언트. 설정 미비 시 비활성 상태로 안전하게 동작."""
 
-    HEADER = ["일시", "질문", "답변요약", "전체답변", "근거유형", "사용자구분"]
+    HEADER = ["일시", "질문", "답변요약", "전체답변", "근거유형", "사용자구분", "확정여부"]
 
     # 종합문서 탭(워크시트) 이름 및 헤더
     # - 개별 질의응답(HEADER, sheet1)과는 별도 탭에 저장하여, "개별 답변 로그"와
@@ -116,6 +116,26 @@ class SheetLogger:
     ACCOUNT_SHEET_NAME = "계정설정"
     ACCOUNT_HEADER = ["역할", "비밀번호해시"]
 
+    def _sync_header(self, worksheet, target_header: list) -> None:
+        """
+        워크시트 1행의 헤더를 target_header에 맞춤. 헤더가 아예 없거나 구조가
+        많이 다르면 새로 삽입하고, 기존 헤더가 target_header의 앞부분과
+        완전히 일치하는 경우(=뒤에 컬럼만 새로 추가된 경우, 예: "확정여부"
+        컬럼 추가)는 insert_row로 행을 끼워 넣지 않고 빈 헤더 셀만 채움.
+
+        설계 의도 (2026-07-09 추가): insert_row(header, 1)은 기존 헤더 행을
+        데이터 행으로 밀어내려 시트를 망가뜨림. 컬럼이 뒤에만 추가되는
+        흔한 마이그레이션 상황에서는 이 방식이 안전하지 않으므로 분리함.
+        """
+        existing = worksheet.row_values(1)
+        if existing == target_header:
+            return
+        if existing and target_header[: len(existing)] == existing:
+            for col_idx in range(len(existing) + 1, len(target_header) + 1):
+                worksheet.update_cell(1, col_idx, target_header[col_idx - 1])
+        else:
+            worksheet.insert_row(target_header, 1)
+
     def __init__(self, sheet_id: str = None, credentials_path: str = None, credentials_json: str = None):
         """
         Parameters
@@ -177,10 +197,8 @@ class SheetLogger:
             spreadsheet = gc.open_by_key(sheet_id)
             self.sheet = spreadsheet.sheet1
 
-            # 헤더가 없으면 추가
-            existing = self.sheet.row_values(1)
-            if existing != self.HEADER:
-                self.sheet.insert_row(self.HEADER, 1)
+            # 헤더가 없으면 추가 (또는 컬럼이 뒤에 추가된 경우 안전하게 보강)
+            self._sync_header(self.sheet, self.HEADER)
 
             # 종합문서 탭 확인/생성 (없으면 새로 만듦)
             try:
@@ -190,19 +208,7 @@ class SheetLogger:
                     title=self.SUMMARY_SHEET_NAME, rows=200, cols=len(self.SUMMARY_HEADER)
                 )
 
-            existing_summary_header = self.summary_sheet.row_values(1)
-            if existing_summary_header != self.SUMMARY_HEADER:
-                if existing_summary_header and self.SUMMARY_HEADER[: len(existing_summary_header)] == existing_summary_header:
-                    # 기존 헤더가 새 헤더의 앞부분과 완전히 일치 = 뒤에 컬럼만
-                    # 추가된 경우("확정여부" 추가가 정확히 이 상황임). 이때
-                    # insert_row로 헤더 행을 새로 끼워 넣으면 기존 헤더 행이
-                    # 데이터 행으로 밀려 내려가 시트가 망가지므로, 빈 헤더
-                    # 셀만 채워 넣는 안전한 방식을 씀(기존 데이터 행은 전혀
-                    # 건드리지 않음).
-                    for col_idx in range(len(existing_summary_header) + 1, len(self.SUMMARY_HEADER) + 1):
-                        self.summary_sheet.update_cell(1, col_idx, self.SUMMARY_HEADER[col_idx - 1])
-                else:
-                    self.summary_sheet.insert_row(self.SUMMARY_HEADER, 1)
+            self._sync_header(self.summary_sheet, self.SUMMARY_HEADER)
 
             # 지식베이스 탭 확인/생성 (없으면 새로 만듦)
             try:
@@ -262,40 +268,31 @@ class SheetLogger:
             self.error_message = f"[{type(e).__name__}] {e}"
             print(f"[경고] 구글 시트 로깅 초기화 실패: {self.error_message}")
 
-    def log(self, question: str, answer: str, evidence_type: str = "", user_type: str = "직원") -> bool:
+    def log(self, question: str, answer: str, evidence_type: str = "", user_type: str = "직원") -> str:
         """
         질의응답 1건을 시트에 한 행으로 추가.
 
-        Parameters
-        ----------
-        question : str
-            사용자 질문
-        answer : str
-            AI 답변 전체
-        evidence_type : str
-            "1순위(내부)", "2순위(법령)", "3순위(예규검색)", "4순위(AI일반지식)" 등 요약
-        user_type : str
-            "회계사" 또는 "직원" (구분 표시용, 로그인 시스템이 없으므로 단순 라벨)
-
         Returns
         -------
-        bool
-            성공 여부 (실패해도 예외를 던지지 않음)
+        str | None
+            성공 시 이 행의 '일시' 값(타임스탬프 문자열) — 이후 지식베이스
+            확정 시 mark_log_confirmed()로 이 행을 찾아 "확정됨" 표시하는 데
+            사용됨(2026-07-09 추가, 이전에는 bool만 반환). 실패/비활성 시 None.
         """
         if not self.enabled:
-            return False
+            return None
 
         try:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             summary = answer[:100].replace("\n", " ") + ("..." if len(answer) > 100 else "")
             self.sheet.append_row(
-                [timestamp, question, summary, answer, evidence_type, user_type],
+                [timestamp, question, summary, answer, evidence_type, user_type, ""],
                 value_input_option="RAW",
             )
-            return True
+            return timestamp
         except Exception as e:
             print(f"[경고] 구글 시트 로깅 실패 (답변 생성에는 영향 없음): {e}")
-            return False
+            return None
 
     def get_recent_logs(self, limit: int = 20) -> list:
         """
@@ -315,6 +312,37 @@ class SheetLogger:
         except Exception as e:
             print(f"[경고] 구글 시트 조회 실패: {e}")
             return []
+
+    def mark_log_confirmed(self, timestamp: str, question: str) -> bool:
+        """
+        개별 질의응답 기록 1건의 '확정여부' 컬럼만 "확정됨"으로 표시.
+
+        설계 의도 (2026-07-09 추가):
+        - 종합문서와 달리 개별 질의응답은 원본 로그를 최종본으로 덮어쓰지
+          않기로 함(검색기록과 지식베이스를 계속 별도로 유지하는 기존 방침
+          그대로). 다만 "이 질문/답변이 이미 지식베이스에 확정되었는지"를
+          검색기록 화면에서 바로 알 수 있도록 표시만 남김 — 내용은 건드리지
+          않음(update_summary와 달리 덮어쓰기 없음).
+        - delete_log와 동일하게 '일시'와 '질문' 두 값이 모두 일치하는 행을 찾음.
+
+        Returns
+        -------
+        bool
+            표시 성공 여부 (해당 행을 못 찾은 경우도 False)
+        """
+        if not self.enabled:
+            return False
+
+        try:
+            all_values = self.sheet.get_all_values()
+            for row_idx, row in enumerate(all_values[1:], start=2):
+                if len(row) >= 2 and row[0] == timestamp and row[1] == question:
+                    self.sheet.update_cell(row_idx, 7, "확정됨")
+                    return True
+            return False
+        except Exception as e:
+            print(f"[경고] 검색기록 확정 표시 실패: {e}")
+            return False
 
     def delete_log(self, timestamp: str, question: str) -> bool:
         """

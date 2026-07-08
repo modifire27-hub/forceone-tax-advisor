@@ -437,6 +437,15 @@ def render_first_time_account_setup(login_logger: SheetLogger):
             st.rerun()
 
 
+def _get_master_reset_password() -> str:
+    """
+    비상 복구 비밀번호 값. .env/Secrets의 MASTER_RESET_PASSWORD가 있으면 그 값을,
+    없으면 기본값 "4119"를 사용함. 기본값을 그대로 두는 건 보안상 바람직하지
+    않으므로, 이 값으로 로그인하면 화면에 경고 배너를 띄워 변경을 유도함.
+    """
+    return os.getenv("MASTER_RESET_PASSWORD", "").strip() or "4119"
+
+
 def check_app_password():
     """
     입력한 비밀번호가 관리자/직원 비밀번호 중 무엇과 일치하는지 확인.
@@ -480,6 +489,16 @@ def check_app_password():
                 st.rerun()
             elif login_logger.verify_account_password("staff", pw_input):
                 st.session_state.app_role = "staff"
+                st.rerun()
+            elif pw_input.strip() and pw_input.strip() == _get_master_reset_password():
+                # 비상 복구 비밀번호 (2026-07-09 추가):
+                # 계정설정 탭의 정상 비밀번호를 잊어버렸거나(원인 불명 포함)
+                # 잠긴 경우를 대비한 "항상 통하는" 백업 열쇠. 기본값은 "4119"이며
+                # .env/Secrets의 MASTER_RESET_PASSWORD로 바꿀 수 있음. 이 값으로
+                # 들어오면 관리자 권한을 주되, 화면에 눈에 띄게 경고를 남겨 즉시
+                # 정식 비밀번호로 바꾸도록 유도함(그대로 두면 보안 구멍이므로).
+                st.session_state.app_role = "admin"
+                st.session_state["_logged_in_via_master_reset"] = True
                 st.rerun()
             else:
                 st.error("비밀번호가 일치하지 않습니다.")
@@ -538,6 +557,12 @@ if not app_role:
 # 섹션의 user_type 자리를 대체).
 is_admin = app_role == "admin"
 user_type = "회계사" if is_admin else "직원"
+
+if st.session_state.get("_logged_in_via_master_reset"):
+    st.error(
+        "⚠️ 비상 복구용 기본 비밀번호로 로그인했습니다. 보안을 위해 지금 바로 "
+        "사이드바의 '로그인 비밀번호 관리'에서 관리자/직원 비밀번호를 새로 설정해주세요."
+    )
 
 
 # ----------------------------------------------------------------------
@@ -772,6 +797,7 @@ def render_confirm_to_kb_button(
     key_prefix: str,
     dialog_row_key: str = None,
     source_summary_timestamp: str = None,
+    source_log_timestamp: str = None,
 ):
     """
     '지식베이스에 확정 저장' 버튼만 그림. 누르면 실제 작업 화면은 이 버튼이 있는
@@ -808,6 +834,12 @@ def render_confirm_to_kb_button(
         덮어씀(update_summary) — 검증 전 원본과 확정된 최종본이 따로 남아
         헷갈리는 것을 막기 위함. 개별 질문/답변 확정 시에는 전달하지 않음(그
         경우는 검색기록과 지식베이스가 계속 별도로 남는 기존 방식 그대로 유지).
+    source_log_timestamp : str, optional
+        이 확정 대상이 개별 질문/답변(검색기록 탭의 특정 행)이면 그 행의
+        '일시' 값을 전달함(2026-07-09 추가). 종합문서와 달리 내용을 덮어쓰지는
+        않고, 검색기록 탭의 '확정여부' 컬럼만 "확정됨"으로 표시함
+        (mark_log_confirmed) — 검색기록에서 이미 지식베이스에 올라간
+        질문인지 한눈에 알 수 있도록 하기 위함.
     """
     target_key = "kb_confirm_target"
     if st.button("지식베이스에 확정 저장", key=f"{key_prefix}_confirm_entry_btn"):
@@ -819,6 +851,7 @@ def render_confirm_to_kb_button(
             # 나온 모든 라운드(1차,2차...)가 이 ID로 묶여 저장/복원/삭제됨.
             "crosscheck_session_id": str(uuid.uuid4()),
             "source_summary_timestamp": source_summary_timestamp,
+            "source_log_timestamp": source_log_timestamp,
         }
         # 이전에 다른 항목을 검증/수정하던 상태가 남아있으면 깨끗하게 초기화.
         # edited_content 키 자체를 세션 상태에서 제거함(아직 확정 전이므로
@@ -902,6 +935,7 @@ def render_confirm_to_kb_workspace():
     # 종합문서 확정 시 원본 '종합문서' 탭 행을 덮어쓰기 위한 타임스탬프
     # (개별 질문/답변 확정 시에는 None — render_confirm_to_kb_button 참고)
     source_summary_timestamp = target.get("source_summary_timestamp")
+    source_log_timestamp = target.get("source_log_timestamp")
     st.session_state["kb_confirm_target"] = target
 
     st.divider()
@@ -1158,6 +1192,13 @@ def render_confirm_to_kb_workspace():
                         timestamp=source_summary_timestamp,
                         new_summary_text=st.session_state[edited_key],
                     )
+                # 개별 질문/답변 확정인 경우: 내용은 그대로 두고 검색기록
+                # 탭의 '확정여부'만 표시(종합문서와 달리 원본을 덮어쓰지 않음).
+                if source_log_timestamp and engine.sheet_logger and engine.sheet_logger.enabled:
+                    engine.sheet_logger.mark_log_confirmed(
+                        timestamp=source_log_timestamp,
+                        question=question,
+                    )
                 # 이번에 확정한 항목의 배지를 즉시 "✅ 확정됨"으로 바꾸기 위한
                 # 세션 플래그. 화면에 종합문서를 표시하는 곳에서 참고함.
                 st.session_state[f"{key_prefix}_kb_confirmed"] = True
@@ -1220,8 +1261,10 @@ def show_log_dialog():
     st.caption(f"{row.get('일시', '')}  ·  {row.get('사용자구분', '')}")
     st.markdown(f"**질문**")
     st.write(question)
-    st.divider()
     dialog_key_base = f"dialog_{row.get('일시', '')}".replace(" ", "_").replace(":", "")
+    if row.get("확정여부") == "확정됨" or st.session_state.get(f"{dialog_key_base}_kb_confirmed"):
+        st.success("✅ 지식베이스에 확정된 질문/답변입니다.")
+    st.divider()
     render_copyable_text(answer, key=f"{dialog_key_base}_answer")
     st.divider()
 
@@ -1244,6 +1287,7 @@ def show_log_dialog():
             render_confirm_to_kb_button(
                 question=question, answer=answer, key_prefix=dialog_key_base,
                 dialog_row_key="_dialog_log_row",
+                source_log_timestamp=row.get("일시", ""),
             )
 
     with col3:
@@ -1463,7 +1507,16 @@ with st.sidebar:
                     new_login_pw = st.text_input("새 비밀번호 (4자 이상)", type="password")
                     new_login_pw_confirm = st.text_input("새 비밀번호 확인", type="password")
                     if st.form_submit_button("비밀번호 변경"):
-                        if not engine.sheet_logger.verify_account_password("admin", current_admin_pw):
+                        # 비상 복구 비밀번호로 로그인한 경우, 원래 비밀번호를
+                        # 몰라서 여기 온 것이므로 본인확인 단계에서도 비상
+                        # 복구 비밀번호를 그대로 인정함(그래야 실제로 복구가
+                        # 끝까지 됨 — 안 그러면 "잊어버린 비밀번호를 다시
+                        # 입력하라"는 막다른 길이 됨).
+                        current_ok = (
+                            engine.sheet_logger.verify_account_password("admin", current_admin_pw)
+                            or current_admin_pw.strip() == _get_master_reset_password()
+                        )
+                        if not current_ok:
                             st.error("현재 관리자(회계사) 비밀번호가 일치하지 않습니다.")
                         elif len(new_login_pw.strip()) < 4:
                             st.error("새 비밀번호는 4자 이상으로 설정해주세요.")
@@ -1471,6 +1524,7 @@ with st.sidebar:
                             st.error("입력한 새 비밀번호가 서로 다릅니다.")
                         else:
                             engine.sheet_logger.set_account_password(pw_role, new_login_pw)
+                            st.session_state["_logged_in_via_master_reset"] = False
                             st.success(f"{pw_role_label} 비밀번호가 변경되었습니다.")
 
         if st.button(
@@ -1670,7 +1724,8 @@ with st.sidebar:
             st.caption(f"{len(filtered)}건 표시 (전체 불러온 기록 {len(loaded)}건 중)")
 
             for idx, row in enumerate(filtered):
-                label = f"{row.get('일시', '')} | {row.get('사용자구분', '')} | {row.get('질문', '')[:30]}"
+                badge = "✅ " if row.get("확정여부") == "확정됨" else ""
+                label = f"{badge}{row.get('일시', '')} | {row.get('사용자구분', '')} | {row.get('질문', '')[:30]}"
                 if st.button(label, key=f"log_open_{idx}", use_container_width=True):
                     st.session_state["_dialog_log_row"] = row
                     show_log_dialog()
@@ -1958,11 +2013,16 @@ if submitted:
 
         # 구글 시트 로깅 (설정된 경우에만 동작, 실패해도 화면 흐름에 영향 없음)
         if engine.sheet_logger and engine.sheet_logger.enabled:
-            engine.sheet_logger.log(
+            log_ts = engine.sheet_logger.log(
                 question=user_question.strip(),
                 answer=answer,
                 user_type=user_type,
             )
+            # 지식베이스 확정 시 검색기록 탭의 해당 행을 정확히 찾아 "확정됨"
+            # 표시를 남기기 위한 값. log()가 실제로 사용한 타임스탬프를 그대로
+            # 받아두는 게 안전함(위에서 별도로 만든 "time" 값과는 미세하게
+            # (초 단위) 어긋날 수 있어 신뢰할 수 없음).
+            st.session_state.current_thread[-1]["log_ts"] = log_ts
 
         st.rerun()
 
@@ -1990,6 +2050,8 @@ if st.session_state.current_thread:
         with st.container(border=True):
             st.markdown(f"<div class='qa-meta'>{qa['time']}</div>", unsafe_allow_html=True)
             st.markdown(f"<div class='qa-question'>Q. {qa['question']}</div>", unsafe_allow_html=True)
+            if st.session_state.get(f"cur_{qa_key}_kb_confirmed"):
+                st.caption("✅ 지식베이스에 확정된 질문/답변입니다.")
             render_copyable_text(qa["answer"], key=f"copy_cur_{qa_key}")
 
             col1, col2, col3 = st.columns([1, 1, 1.4])
@@ -2012,7 +2074,8 @@ if st.session_state.current_thread:
             with col3:
                 if is_admin:
                     render_confirm_to_kb_button(
-                        question=qa["question"], answer=qa["answer"], key_prefix=f"cur_{qa_key}"
+                        question=qa["question"], answer=qa["answer"], key_prefix=f"cur_{qa_key}",
+                        source_log_timestamp=qa.get("log_ts"),
                     )
 
     # ------------------------------------------------------------------

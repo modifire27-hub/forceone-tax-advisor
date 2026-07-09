@@ -168,6 +168,21 @@ st.markdown(
         font-weight: 700 !important;
         color: var(--pf-text-strong) !important;
     }
+    /* 질의 입력창(textarea) - 순백 배경이 밋밋하다는 피드백으로
+       아주 옅은 골드 틴트를 얹음. 글자색은 기본 진한 색 그대로 두고
+       배경/테두리/포커스 링만 골드 테마와 통일. */
+    .st-key-question_form_wrap div[data-testid="stForm"] textarea {
+        background-color: #fffbf0 !important;
+        border-color: #ecdfb8 !important;
+    }
+    .st-key-question_form_wrap div[data-testid="stForm"] textarea::placeholder {
+        color: #a89968 !important;
+    }
+    .st-key-question_form_wrap div[data-testid="stForm"] textarea:focus {
+        background-color: #fffdf5 !important;
+        box-shadow: 0 0 0 2px var(--pf-gold) !important;
+        border-color: var(--pf-gold) !important;
+    }
 
     /* ------------------------------------------------------------------
        로그인 패널 - 네이비 배경 (브라우저 호환성 문제 없는 순수 HTML 블록)

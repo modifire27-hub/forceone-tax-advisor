@@ -154,6 +154,14 @@ class SheetLogger:
         if existing == target_header:
             return
         if existing and target_header[: len(existing)] == existing:
+            # 실제 사례 (2026-07-09): '종합문서' 탭이 최초 생성 당시 컬럼 수
+            # (cols=5)로 그리드 자체가 5칸까지만 만들어져 있었음. 그 상태에서
+            # 6번째 헤더 셀(F1)에 update_cell을 시도하면 "Range exceeds grid
+            # limits" APIError가 남 — 헤더 텍스트를 채우기 전에 그리드 열 수
+            # 자체를 필요한 만큼 먼저 늘려야 함.
+            needed_cols = len(target_header)
+            if worksheet.col_count < needed_cols:
+                worksheet.add_cols(needed_cols - worksheet.col_count)
             for col_idx in range(len(existing) + 1, len(target_header) + 1):
                 worksheet.update_cell(1, col_idx, target_header[col_idx - 1])
         else:

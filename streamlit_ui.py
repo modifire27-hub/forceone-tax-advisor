@@ -157,6 +157,8 @@ st.markdown(
        사용해 디자인 언어는 통일시킴)
        ------------------------------------------------------------------ */
     .st-key-question_form_wrap div[data-testid="stForm"] {
+        background-color: #fdf8ec !important;
+        border: 1px solid #ecdfb8 !important;
         border-left: 4px solid var(--pf-gold) !important;
         border-radius: 0 12px 12px 0 !important;
     }
@@ -168,20 +170,37 @@ st.markdown(
         font-weight: 700 !important;
         color: var(--pf-text-strong) !important;
     }
-    /* 질의 입력창(textarea) - 순백 배경이 밋밋하다는 피드백으로
-       아주 옅은 골드 틴트를 얹음. 글자색은 기본 진한 색 그대로 두고
-       배경/테두리/포커스 링만 골드 테마와 통일. */
+    /* 질의 입력창(textarea) - 카드 배경(아이보리)에 색을 넣었으므로
+       입력창 자체는 흰색으로 되돌려 "입력하는 곳"이 또렷하게 떠 보이도록.
+       Streamlit이 textarea를 감싸는 baseweb 래퍼에도 기본 배경색을 칠하기
+       때문에, 래퍼와 textarea 양쪽 모두 흰색으로 지정. */
+    .st-key-question_form_wrap div[data-testid="stForm"] div[data-baseweb="textarea"],
     .st-key-question_form_wrap div[data-testid="stForm"] textarea {
-        background-color: #fffbf0 !important;
-        border-color: #ecdfb8 !important;
+        background-color: #ffffff !important;
+        border-color: #e3d9bd !important;
     }
     .st-key-question_form_wrap div[data-testid="stForm"] textarea::placeholder {
         color: #a89968 !important;
     }
     .st-key-question_form_wrap div[data-testid="stForm"] textarea:focus {
-        background-color: #fffdf5 !important;
         box-shadow: 0 0 0 2px var(--pf-gold) !important;
         border-color: var(--pf-gold) !important;
+    }
+    /* 조회 버튼 - 아이보리 카드 위에서 골드 버튼은 묻히므로 네이비로 채움.
+       (전역 primary 버튼 골드 규칙보다 우선하도록 카드 범위로 한정) */
+    .st-key-question_form_wrap div[data-testid="stForm"] button {
+        background-color: var(--pf-navy) !important;
+        border-color: var(--pf-navy) !important;
+        color: #ffffff !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.02em !important;
+    }
+    .st-key-question_form_wrap div[data-testid="stForm"] button:hover {
+        background-color: var(--pf-navy-light) !important;
+        border-color: var(--pf-navy-light) !important;
+    }
+    .st-key-question_form_wrap div[data-testid="stForm"] button p {
+        color: #ffffff !important;
     }
 
     /* ------------------------------------------------------------------

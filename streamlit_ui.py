@@ -1074,249 +1074,267 @@ def render_confirm_to_kb_workspace():
         if r.get("external_ai_input"):
             with st.expander(f"{r['round']}차에 보냈던 질문", expanded=False):
                 st.code(r.get("next_prompt", "(기록 없음)"), language="text")
-            st.markdown(f"**{r['round']}차 검증 후 외부 AI로부터 받은 답변**")
+            _src = r.get("source", "")
+            if _src == "auto":
+                st.markdown(f"**{r['round']}차 — 🤖 Claude 자동 교차검증이 지적한 내용**")
+            elif _src == "manual":
+                st.markdown(f"**{r['round']}차 — ✍️ 수동으로 붙여넣은 다른 AI의 답변**")
+            else:
+                st.markdown(f"**{r['round']}차 검증 후 받은 답변**")
             st.success(r["external_ai_input"])
 
     if not st.session_state.get(proceed_key):
-        # ── Claude 자동 교차검증 (v1.11 신규) ─────────────────────────
-        # 수동 복붙(아래) 대신, 서로 다른 벤더인 Claude(Sonnet)를 API로 직접
-        # 호출해 "점검 → 본문 반영"을 자동으로 여러 라운드 반복함. 종료조건은
-        # ①Claude '완료' 신호 ②본문 무변화(수렴) ③최대 라운드 3중(엔진 참고).
         st.divider()
-        st.markdown("#### 🤖 Claude 자동 교차검증 (권장)")
+        tab_auto, tab_manual = st.tabs(["🤖 자동 (Claude)", "✍️ 수동 (다른 AI 복사/붙여넣기)"])
 
-        # 직전 자동 실행 결과 메시지 / Claude 최종 판단 표시
-        _auto_msg = st.session_state.get(f"{key_prefix}_auto_msg")
-        if _auto_msg:
-            _lvl, _txt = _auto_msg
-            getattr(st, _lvl, st.info)(_txt)
-            _fc = st.session_state.get(f"{key_prefix}_auto_final_critique", "")
-            if _fc:
-                # 성공(✅)이 아니면(경고·실패) Claude의 남은 지적을 놓치지 않도록
-                # 최종 의견을 자동으로 펼쳐서 보여준다.
-                _expand_critique = (_lvl != "success")
-                with st.expander("Claude의 마지막 검토 의견 전체 보기", expanded=_expand_critique):
-                    render_copyable_text(_fc, key=f"{key_prefix}_auto_final_critique_view")
+        # ══════════════════════════════════════════════════════════════
+        # 탭 1 — Claude 자동 교차검증
+        # ══════════════════════════════════════════════════════════════
+        # 서로 다른 벤더인 Claude(Sonnet)를 API로 직접 호출해 "점검 → 본문
+        # 반영"을 자동으로 여러 라운드 반복함. 종료조건은 ①Claude '완료' 신호
+        # ②본문 무변화(수렴) ③최대 라운드 3중(엔진 참고).
+        with tab_auto:
+            # 직전 자동 실행 결과 메시지 / Claude 최종 판단 표시
+            _auto_msg = st.session_state.get(f"{key_prefix}_auto_msg")
+            if _auto_msg:
+                _lvl, _txt = _auto_msg
+                getattr(st, _lvl, st.info)(_txt)
+                _fc = st.session_state.get(f"{key_prefix}_auto_final_critique", "")
+                if _fc:
+                    # 성공(✅)이 아니면(경고·실패) Claude의 남은 지적을 놓치지 않도록
+                    # 최종 의견을 자동으로 펼쳐서 보여준다.
+                    _expand_critique = (_lvl != "success")
+                    with st.expander("Claude의 마지막 검토 의견 전체 보기", expanded=_expand_critique):
+                        render_copyable_text(_fc, key=f"{key_prefix}_auto_final_critique_view")
 
-        if not engine.auto_cross_check_enabled:
-            st.info(
-                "자동 교차검증(Claude)을 쓰려면 Streamlit Secrets에 ANTHROPIC_API_KEY를 "
-                "추가하세요(공개 저장소이므로 코드에는 넣지 마세요). 지금은 아래 수동 "
-                "방식으로 진행할 수 있습니다."
-            )
-        else:
-            st.caption(
-                "서로 다른 벤더인 Claude(Sonnet)가 조문을 우선 근거로 문서를 점검하고 "
-                "그 지적을 문서에 자동 반영합니다. ① Claude가 '더 고칠 것 없음'으로 "
-                "판단하거나 ② 문서가 더 이상 바뀌지 않거나 ③ 최대 라운드에 도달하면 "
-                "자동으로 멈춥니다."
-            )
-            _col_r, _col_w = st.columns([1, 1])
-            with _col_r:
-                _max_rounds = st.number_input(
-                    "최대 라운드 수",
-                    min_value=1, max_value=6, value=2, step=1,
-                    key=f"{key_prefix}_auto_max_rounds",
-                    help="Claude 호출 상한입니다. 보통 1~2회면 핵심 오류가 잡힙니다. "
-                         "라운드가 늘수록 비용도 비례해서 늘어납니다.",
-                )
-            with _col_w:
-                _use_web = st.checkbox(
-                    "웹검색 사용",
-                    value=False,
-                    key=f"{key_prefix}_auto_use_web",
-                    help="켜면 Claude가 조문으로 부족할 때 웹을 검색합니다. 정확도가 "
-                         "조금 오를 수 있으나 호출당 별도 과금 + 토큰이 늘어 비용이 "
-                         "크게 증가합니다(문서 1건에 수십 센트~$1). 조항 번호·특례 등 "
-                         "핵심 오류는 웹검색 없이도 대부분 잡히니 기본은 꺼두는 것을 권합니다.",
-                )
-            # 대략적 비용 안내 — 문서 길이에 따라 라운드당 비용을 러프하게 추정
-            _doc_len = len(current_document or "")
-            if _use_web:
-                st.caption(
-                    "⚠️ 웹검색 ON: 문서 1건당 대략 수십 센트~$1까지 나올 수 있습니다. "
-                    "긴 종합문서일수록 비쌉니다. 정말 필요할 때만 켜세요."
-                )
-            elif _doc_len > 6000:
-                st.caption(
-                    "이 문서는 다소 길어(입력 토큰이 큼) 라운드당 대략 몇 센트 정도가 "
-                    "예상됩니다. 웹검색을 껐으므로 부담은 크지 않습니다."
+            if not engine.auto_cross_check_enabled:
+                st.info(
+                    "자동 교차검증(Claude)을 쓰려면 Streamlit Secrets에 ANTHROPIC_API_KEY를 "
+                    "추가하세요(공개 저장소이므로 코드에는 넣지 마세요). 지금은 '✍️ 수동' "
+                    "탭으로 진행할 수 있습니다."
                 )
             else:
-                st.caption("웹검색 OFF 기준, 문서 1건당 보통 1~5센트 수준입니다.")
+                st.caption(
+                    "서로 다른 벤더인 Claude(Sonnet)가 조문을 우선 근거로 문서를 점검하고 "
+                    "그 지적을 문서에 자동 반영합니다. ① Claude가 '더 고칠 것 없음'으로 "
+                    "판단하거나 ② 문서가 더 이상 바뀌지 않거나 ③ 최대 라운드에 도달하면 "
+                    "자동으로 멈춥니다."
+                )
+                _col_r, _col_w = st.columns([1, 1])
+                with _col_r:
+                    _max_rounds = st.number_input(
+                        "최대 라운드 수",
+                        min_value=1, max_value=6, value=2, step=1,
+                        key=f"{key_prefix}_auto_max_rounds",
+                        help="Claude 호출 상한입니다. 보통 1~2회면 핵심 오류가 잡힙니다. "
+                             "라운드가 늘수록 비용도 비례해서 늘어납니다.",
+                    )
+                with _col_w:
+                    _use_web = st.checkbox(
+                        "웹검색 사용",
+                        value=False,
+                        key=f"{key_prefix}_auto_use_web",
+                        help="켜면 Claude가 조문으로 부족할 때 웹을 검색합니다. 정확도가 "
+                             "조금 오를 수 있으나 호출당 별도 과금 + 토큰이 늘어 비용이 "
+                             "크게 증가합니다(문서 1건에 수십 센트~$1). 조항 번호·특례 등 "
+                             "핵심 오류는 웹검색 없이도 대부분 잡히니 기본은 꺼두는 것을 권합니다.",
+                    )
+                # 대략적 비용 안내 — 문서 길이에 따라 라운드당 비용을 러프하게 추정
+                _doc_len = len(current_document or "")
+                if _use_web:
+                    st.caption(
+                        "⚠️ 웹검색 ON: 문서 1건당 대략 수십 센트~$1까지 나올 수 있습니다. "
+                        "긴 종합문서일수록 비쌉니다. 정말 필요할 때만 켜세요."
+                    )
+                elif _doc_len > 6000:
+                    st.caption(
+                        "이 문서는 다소 길어(입력 토큰이 큼) 라운드당 대략 몇 센트 정도가 "
+                        "예상됩니다. 웹검색을 껐으므로 부담은 크지 않습니다."
+                    )
+                else:
+                    st.caption("웹검색 OFF 기준, 문서 1건당 보통 1~5센트 수준입니다.")
+                st.caption(
+                    "⚠️ API 호출은 응답이 비정상 종료돼도 과금될 수 있습니다. 아래 실행 "
+                    "중 오류가 나면 콘솔 Billing에서 사용량을 한 번 확인해보세요."
+                )
+                if st.button(
+                    "🤖 Claude로 자동 교차검증 실행",
+                    key=f"{key_prefix}_auto_run_btn_{current_round}",
+                    type="primary",
+                ):
+                    with st.spinner(
+                        "Claude가 문서를 검토하고 지적을 반영하는 과정을 반복하는 중입니다... "
+                        "(라운드당 최대 수십 초, 웹검색 시 더 걸릴 수 있음)"
+                    ):
+                        _counter = {"n": current_round}
+
+                        def _backup_step(step):
+                            # 매 라운드 결과를 곧바로 구글시트에 백업(중간에 연결이
+                            # 끊겨도 진행분이 남도록). 실패해도 루프는 계속.
+                            _counter["n"] += 1
+                            if engine.sheet_logger and engine.sheet_logger.enabled:
+                                try:
+                                    engine.sheet_logger.save_crosscheck_round(
+                                        session_id=crosscheck_session_id,
+                                        round_no=_counter["n"],
+                                        question=question,
+                                        original_answer=answer,
+                                        verification_text=step["change_summary"],
+                                        cross_prompt=step["prompt_sent"],
+                                        external_ai_input=step["critique"],
+                                        next_verification_text=step["new_document"],
+                                    )
+                                except Exception:
+                                    pass
+
+                        result = engine.run_auto_cross_check(
+                            question=question,
+                            current_document=current_document,
+                            max_rounds=int(_max_rounds),
+                            prev_change_summary=(doc_rounds[-1]["change_summary"] if doc_rounds else ""),
+                            enable_web_search=bool(_use_web),
+                            on_step=_backup_step,
+                        )
+
+                    # 반환된 각 라운드를 기존 수동 흐름과 동일한 방식으로 기록에 반영
+                    for step in result["steps"]:
+                        _rounds = st.session_state[rounds_key]
+                        # 이 step을 보낸 시점의 마지막 라운드에 "보낸 질문/받은 답변"을 채움
+                        _rounds[-1]["next_prompt"] = step["prompt_sent"]
+                        _rounds[-1]["external_ai_input"] = step["critique"]
+                        _rounds[-1]["source"] = "auto"
+                        _rounds.append({
+                            "round": len(_rounds) + 1,
+                            "document": step["new_document"],
+                            "change_summary": step["change_summary"],
+                            "verification_detail": "",
+                            "next_prompt": "",
+                            "external_ai_input": "",
+                        })
+                        st.session_state[rounds_key] = _rounds
+                        st.session_state[current_doc_key] = step["new_document"]
+
+                    # 이후 수동 라운드를 이어갈 수 있도록 최종 문서 기준 질문 재생성
+                    _rounds = st.session_state[rounds_key]
+                    _final_doc = st.session_state[current_doc_key]
+                    _last_summary = _rounds[-1]["change_summary"] if _rounds else ""
+                    st.session_state[next_prompt_key] = engine.build_next_round_prompt(
+                        question, _final_doc, _last_summary
+                    )
+                    if _rounds:
+                        _rounds[-1]["next_prompt"] = st.session_state[next_prompt_key]
+
+                    # 종료 사유 메시지 구성 (rerun 후 화면에 표시하기 위해 세션에 저장)
+                    #
+                    # 안전 원칙(v1.11.1): "성공(✅)"은 오직 Claude가 명시적으로
+                    # [검토완료: 예]를 낸 경우(claude_complete)에만 표시한다.
+                    # - "converged": 문서가 안 바뀌어 멈춘 것일 뿐 Claude가 완료를
+                    #   선언한 게 아니므로 ✅가 아니라 ⚠️로 표시하고 Claude 최종
+                    #   의견을 반드시 확인하게 한다.
+                    # - "apply_failed": Claude가 지적했으나 그 지적을 본문에 반영하지
+                    #   못한 것이므로 절대 성공이 아니다. 강한 경고로 표시하고,
+                    #   회계사가 아래 'Claude의 마지막 검토 의견'을 직접 보고 수동
+                    #   반영하도록 안내한다. (과거: 이 경우가 ✅ 수렴으로 잘못
+                    #   표시되어, 지적이 반영 안 된 문서를 확정할 위험이 있었음)
+                    _n = result["rounds_run"]
+                    _applied = len(result["steps"])
+                    _reason = result["stop_reason"]
+                    if _reason == "claude_complete":
+                        _msg = ("success", f"✅ Claude가 더 고칠 실질적 오류가 없다고 판단해 종료했습니다 (검토 {_n}회, 본문 반영 {_applied}회). 그래도 최종 확정 전 내용을 한 번 훑어보세요.")
+                    elif _reason == "apply_failed":
+                        _msg = ("error", f"❌ Claude가 지적한 내용을 문서에 자동 반영하지 못했습니다(반영 실패). 이 문서에는 Claude의 지적이 아직 반영되지 않았으니 그대로 확정하지 마세요. 아래 'Claude의 마지막 검토 의견'을 직접 확인해 수동으로 반영하거나, '✍️ 수동' 탭으로 진행하세요. (긴 종합문서에서 이 실패가 자주 발생합니다)")
+                    elif _reason == "converged":
+                        _msg = ("warning", f"⚠️ 문서가 더 이상 바뀌지 않아 멈췄습니다 (검토 {_n}회, 반영 {_applied}회). 다만 Claude가 '완료'를 선언한 것은 아니므로, 아래 'Claude의 마지막 검토 의견'에 남은 지적이 없는지 꼭 확인하세요.")
+                    elif _reason == "max_rounds":
+                        _msg = ("warning", f"⚠️ 최대 {int(_max_rounds)}라운드에 도달해 종료했습니다 (반영 {_applied}회). Claude가 완료를 선언한 것은 아니니, 아래 검토 의견을 확인하고 필요하면 자동 실행을 한 번 더 누르거나 수동으로 진행하세요.")
+                    else:
+                        if result["steps"]:
+                            _msg = ("warning", f"⚠️ 자동 교차검증이 중간에 중단됐습니다 (중단 전 {_applied}회 반영): {result['error']}")
+                        else:
+                            _msg = ("error", f"❌ 자동 교차검증을 시작하지 못했습니다: {result['error']}")
+                    st.session_state[f"{key_prefix}_auto_msg"] = _msg
+                    st.session_state[f"{key_prefix}_auto_final_critique"] = result.get("final_critique", "")
+                    st.rerun()
+
+                st.caption("자동 반영이 끝난 뒤에도, '✍️ 수동' 탭에서 라운드를 더 이어가거나 자동 실행을 반복할 수 있습니다.")
+
+        # ══════════════════════════════════════════════════════════════
+        # 탭 2 — (기존) 수동 교차검증: 다른 AI에 복사해서 물어보고 답을 붙여넣음
+        # ══════════════════════════════════════════════════════════════
+        with tab_manual:
+            st.markdown(f"#### 🔸 {current_round}차에 보낼 질문 (다음 라운드 준비)")
+            st.caption(
+                "아래 질문을 복사해서 다른 AI(ChatGPT, claude.ai 등)에게 물어보고, 받은 "
+                "답변을 아래 칸에 붙여넣으면 그 의견을 반영해 문서를 다시 작성합니다(2차부터는 "
+                "웹검색 없이 빠르게 처리됩니다). 이 과정은 원하는 만큼 반복할 수 있고, "
+                "충분하다면 생략하고 바로 확정해도 됩니다. API 비용이 들지 않습니다."
+            )
+            if not st.session_state.get(next_prompt_key):
+                st.session_state[next_prompt_key] = engine.build_next_round_prompt(
+                    question, current_document, doc_rounds[-1]["change_summary"] if doc_rounds else ""
+                )
+            st.code(st.session_state[next_prompt_key], language="text")
+
+            st.markdown("**다른 AI에게서 받은 답변을 아래에 붙여넣고 반영하세요**")
+            external_input = st.text_area(
+                "다른 AI로부터 받은 답변을 여기에 붙여넣으세요",
+                height=200,
+                key=f"{key_prefix}_external_ai_input_area_{current_round}",
+            )
             if st.button(
-                "🤖 Claude로 자동 교차검증 실행",
-                key=f"{key_prefix}_auto_run_btn_{current_round}",
+                f"이 답변을 반영해서 {current_round + 1}차 확정 문서 만들기",
+                key=f"{key_prefix}_apply_feedback_btn_{current_round}",
                 type="primary",
             ):
-                with st.spinner(
-                    "Claude가 문서를 검토하고 지적을 반영하는 과정을 반복하는 중입니다... "
-                    "(라운드당 최대 수십 초, 웹검색 시 더 걸릴 수 있음)"
-                ):
-                    _counter = {"n": current_round}
+                if not external_input.strip():
+                    st.warning("붙여넣은 외부 AI 답변이 비어 있습니다.")
+                else:
+                    with st.spinner("외부 AI 의견을 반영해 문서를 다시 작성하는 중입니다... (웹검색 없이 빠르게 처리)"):
+                        new_document, change_summary = engine.apply_external_feedback(
+                            question=question,
+                            current_document=current_document,
+                            external_ai_input=external_input.strip(),
+                        )
 
-                    def _backup_step(step):
-                        # 매 라운드 결과를 곧바로 구글시트에 백업(중간에 연결이
-                        # 끊겨도 진행분이 남도록). 실패해도 루프는 계속.
-                        _counter["n"] += 1
-                        if engine.sheet_logger and engine.sheet_logger.enabled:
-                            try:
-                                engine.sheet_logger.save_crosscheck_round(
-                                    session_id=crosscheck_session_id,
-                                    round_no=_counter["n"],
-                                    question=question,
-                                    original_answer=answer,
-                                    verification_text=step["change_summary"],
-                                    cross_prompt=step["prompt_sent"],
-                                    external_ai_input=step["critique"],
-                                    next_verification_text=step["new_document"],
-                                )
-                            except Exception:
-                                pass
+                    # 방금 보낸 질문과 그 답변을 직전 라운드 기록에 채워 넣음
+                    doc_rounds[-1]["next_prompt"] = st.session_state.get(next_prompt_key, "")
+                    doc_rounds[-1]["external_ai_input"] = external_input.strip()
+                    doc_rounds[-1]["source"] = "manual"
 
-                    result = engine.run_auto_cross_check(
-                        question=question,
-                        current_document=current_document,
-                        max_rounds=int(_max_rounds),
-                        prev_change_summary=(doc_rounds[-1]["change_summary"] if doc_rounds else ""),
-                        enable_web_search=bool(_use_web),
-                        on_step=_backup_step,
-                    )
-
-                # 반환된 각 라운드를 기존 수동 흐름과 동일한 방식으로 기록에 반영
-                for step in result["steps"]:
-                    _rounds = st.session_state[rounds_key]
-                    # 이 step을 보낸 시점의 마지막 라운드에 "보낸 질문/받은 답변"을 채움
-                    _rounds[-1]["next_prompt"] = step["prompt_sent"]
-                    _rounds[-1]["external_ai_input"] = step["critique"]
-                    _rounds.append({
-                        "round": len(_rounds) + 1,
-                        "document": step["new_document"],
-                        "change_summary": step["change_summary"],
+                    next_round_no = current_round + 1
+                    doc_rounds.append({
+                        "round": next_round_no,
+                        "document": new_document,
+                        "change_summary": change_summary,
                         "verification_detail": "",
                         "next_prompt": "",
                         "external_ai_input": "",
                     })
-                    st.session_state[rounds_key] = _rounds
-                    st.session_state[current_doc_key] = step["new_document"]
+                    st.session_state[rounds_key] = doc_rounds
+                    st.session_state[current_doc_key] = new_document
 
-                # 이후 수동 라운드를 이어갈 수 있도록 최종 문서 기준 질문 재생성
-                _rounds = st.session_state[rounds_key]
-                _final_doc = st.session_state[current_doc_key]
-                _last_summary = _rounds[-1]["change_summary"] if _rounds else ""
-                st.session_state[next_prompt_key] = engine.build_next_round_prompt(
-                    question, _final_doc, _last_summary
-                )
-                if _rounds:
-                    _rounds[-1]["next_prompt"] = st.session_state[next_prompt_key]
+                    # 다음 라운드용 질문을 곧바로 자동 생성
+                    new_next_prompt = engine.build_next_round_prompt(question, new_document, change_summary)
+                    st.session_state[next_prompt_key] = new_next_prompt
+                    doc_rounds[-1]["next_prompt"] = new_next_prompt
 
-                # 종료 사유 메시지 구성 (rerun 후 화면에 표시하기 위해 세션에 저장)
-                #
-                # 안전 원칙(v1.11.1): "성공(✅)"은 오직 Claude가 명시적으로
-                # [검토완료: 예]를 낸 경우(claude_complete)에만 표시한다.
-                # - "converged": 문서가 안 바뀌어 멈춘 것일 뿐 Claude가 완료를
-                #   선언한 게 아니므로 ✅가 아니라 ⚠️로 표시하고 Claude 최종
-                #   의견을 반드시 확인하게 한다.
-                # - "apply_failed": Claude가 지적했으나 그 지적을 본문에 반영하지
-                #   못한 것이므로 절대 성공이 아니다. 강한 경고로 표시하고,
-                #   회계사가 아래 'Claude의 마지막 검토 의견'을 직접 보고 수동
-                #   반영하도록 안내한다. (과거: 이 경우가 ✅ 수렴으로 잘못
-                #   표시되어, 지적이 반영 안 된 문서를 확정할 위험이 있었음)
-                _n = result["rounds_run"]
-                _applied = len(result["steps"])
-                _reason = result["stop_reason"]
-                if _reason == "claude_complete":
-                    _msg = ("success", f"✅ Claude가 더 고칠 실질적 오류가 없다고 판단해 종료했습니다 (검토 {_n}회, 본문 반영 {_applied}회). 그래도 최종 확정 전 내용을 한 번 훑어보세요.")
-                elif _reason == "apply_failed":
-                    _msg = ("error", f"❌ Claude가 지적한 내용을 문서에 자동 반영하지 못했습니다(반영 실패). 이 문서에는 Claude의 지적이 아직 반영되지 않았으니 그대로 확정하지 마세요. 아래 'Claude의 마지막 검토 의견'을 직접 확인해 수동으로 반영하거나, 아래 수동 교차검증으로 진행하세요. (긴 종합문서에서 이 실패가 자주 발생합니다)")
-                elif _reason == "converged":
-                    _msg = ("warning", f"⚠️ 문서가 더 이상 바뀌지 않아 멈췄습니다 (검토 {_n}회, 반영 {_applied}회). 다만 Claude가 '완료'를 선언한 것은 아니므로, 아래 'Claude의 마지막 검토 의견'에 남은 지적이 없는지 꼭 확인하세요.")
-                elif _reason == "max_rounds":
-                    _msg = ("warning", f"⚠️ 최대 {int(_max_rounds)}라운드에 도달해 종료했습니다 (반영 {_applied}회). Claude가 완료를 선언한 것은 아니니, 아래 검토 의견을 확인하고 필요하면 자동 실행을 한 번 더 누르거나 수동으로 진행하세요.")
-                else:
-                    if result["steps"]:
-                        _msg = ("warning", f"⚠️ 자동 교차검증이 중간에 중단됐습니다 (중단 전 {_applied}회 반영): {result['error']}")
-                    else:
-                        _msg = ("error", f"❌ 자동 교차검증을 시작하지 못했습니다: {result['error']}")
-                st.session_state[f"{key_prefix}_auto_msg"] = _msg
-                st.session_state[f"{key_prefix}_auto_final_critique"] = result.get("final_critique", "")
-                st.rerun()
+                    # 안전장치 — 이번 라운드도 곧바로 백업
+                    if engine.sheet_logger and engine.sheet_logger.enabled:
+                        engine.sheet_logger.save_crosscheck_round(
+                            session_id=crosscheck_session_id,
+                            round_no=next_round_no,
+                            question=question,
+                            original_answer=answer,
+                            verification_text=change_summary,
+                            cross_prompt=new_next_prompt,
+                            external_ai_input=external_input.strip(),
+                            next_verification_text=new_document,
+                        )
+                    st.rerun()
 
-            st.caption("자동 반영이 끝난 뒤에도, 아래 수동 방식으로 라운드를 더 이어가거나 자동 실행을 반복할 수 있습니다.")
-
-        # ── (기존) 수동 교차검증 — 다음 라운드 준비 ──────────────────
+        # ── 확정 (탭과 무관하게 항상 표시) ──────────────────────────
         st.divider()
-        st.markdown(f"#### 🔸 {current_round}차에 보낼 질문 (다음 라운드 준비)")
-        st.caption(
-            "아래 질문을 복사해서 다른 AI(ChatGPT 등)에게 물어보고, 받은 답변을 아래 칸에 "
-            "붙여넣으면 그 의견을 반영해 문서를 다시 작성합니다(2차부터는 웹검색 없이 빠르게 "
-            "처리됩니다). 이 과정은 원하는 만큼 반복할 수 있고, 충분하다면 생략하고 바로 "
-            "확정해도 됩니다."
-        )
-        if not st.session_state.get(next_prompt_key):
-            st.session_state[next_prompt_key] = engine.build_next_round_prompt(
-                question, current_document, doc_rounds[-1]["change_summary"] if doc_rounds else ""
-            )
-        st.code(st.session_state[next_prompt_key], language="text")
-
-        st.markdown("**다른 AI에게서 받은 답변을 아래에 붙여넣고 반영하세요**")
-        external_input = st.text_area(
-            "다른 AI로부터 받은 답변을 여기에 붙여넣으세요",
-            height=200,
-            key=f"{key_prefix}_external_ai_input_area_{current_round}",
-        )
-        if st.button(
-            f"이 답변을 반영해서 {current_round + 1}차 확정 문서 만들기",
-            key=f"{key_prefix}_apply_feedback_btn_{current_round}",
-            type="primary",
-        ):
-            if not external_input.strip():
-                st.warning("붙여넣은 외부 AI 답변이 비어 있습니다.")
-            else:
-                with st.spinner("외부 AI 의견을 반영해 문서를 다시 작성하는 중입니다... (웹검색 없이 빠르게 처리)"):
-                    new_document, change_summary = engine.apply_external_feedback(
-                        question=question,
-                        current_document=current_document,
-                        external_ai_input=external_input.strip(),
-                    )
-
-                # 방금 보낸 질문과 그 답변을 직전 라운드 기록에 채워 넣음
-                doc_rounds[-1]["next_prompt"] = st.session_state.get(next_prompt_key, "")
-                doc_rounds[-1]["external_ai_input"] = external_input.strip()
-
-                next_round_no = current_round + 1
-                doc_rounds.append({
-                    "round": next_round_no,
-                    "document": new_document,
-                    "change_summary": change_summary,
-                    "verification_detail": "",
-                    "next_prompt": "",
-                    "external_ai_input": "",
-                })
-                st.session_state[rounds_key] = doc_rounds
-                st.session_state[current_doc_key] = new_document
-
-                # 다음 라운드용 질문을 곧바로 자동 생성
-                new_next_prompt = engine.build_next_round_prompt(question, new_document, change_summary)
-                st.session_state[next_prompt_key] = new_next_prompt
-                doc_rounds[-1]["next_prompt"] = new_next_prompt
-
-                # 안전장치 — 이번 라운드도 곧바로 백업
-                if engine.sheet_logger and engine.sheet_logger.enabled:
-                    engine.sheet_logger.save_crosscheck_round(
-                        session_id=crosscheck_session_id,
-                        round_no=next_round_no,
-                        question=question,
-                        original_answer=answer,
-                        verification_text=change_summary,
-                        cross_prompt=new_next_prompt,
-                        external_ai_input=external_input.strip(),
-                        next_verification_text=new_document,
-                    )
-                st.rerun()
-
-        st.caption("위 과정은 원하는 만큼 반복할 수 있습니다. 충분히 다듬어졌다면 아래 버튼으로 확정하세요.")
-        st.divider()
+        st.caption("위 과정(자동/수동 어느 쪽이든)은 원하는 만큼 반복할 수 있습니다. 충분히 다듬어졌다면 아래 버튼으로 확정하세요.")
         if st.button(
             f"이걸로 확정 (현재 {current_round}차 문서를 저장 대상으로 사용) →",
             key=f"{key_prefix}_proceed_btn",

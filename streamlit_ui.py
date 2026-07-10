@@ -1092,7 +1092,10 @@ def render_confirm_to_kb_workspace():
             getattr(st, _lvl, st.info)(_txt)
             _fc = st.session_state.get(f"{key_prefix}_auto_final_critique", "")
             if _fc:
-                with st.expander("Claude의 마지막 검토 의견 전체 보기", expanded=False):
+                # 성공(✅)이 아니면(경고·실패) Claude의 남은 지적을 놓치지 않도록
+                # 최종 의견을 자동으로 펼쳐서 보여준다.
+                _expand_critique = (_lvl != "success")
+                with st.expander("Claude의 마지막 검토 의견 전체 보기", expanded=_expand_critique):
                     render_copyable_text(_fc, key=f"{key_prefix}_auto_final_critique_view")
 
         if not engine.auto_cross_check_enabled:
@@ -1103,17 +1106,44 @@ def render_confirm_to_kb_workspace():
             )
         else:
             st.caption(
-                "서로 다른 벤더인 Claude(Sonnet)가 조문을 우선 근거로, 부족할 때만 "
-                "웹검색으로 문서를 점검하고 그 지적을 문서에 자동 반영합니다. "
-                "① Claude가 '더 고칠 것 없음'으로 판단하거나 ② 문서가 더 이상 바뀌지 "
-                "않거나 ③ 최대 라운드에 도달하면 자동으로 멈춥니다."
+                "서로 다른 벤더인 Claude(Sonnet)가 조문을 우선 근거로 문서를 점검하고 "
+                "그 지적을 문서에 자동 반영합니다. ① Claude가 '더 고칠 것 없음'으로 "
+                "판단하거나 ② 문서가 더 이상 바뀌지 않거나 ③ 최대 라운드에 도달하면 "
+                "자동으로 멈춥니다."
             )
-            _max_rounds = st.number_input(
-                "최대 라운드 수",
-                min_value=1, max_value=8, value=4, step=1,
-                key=f"{key_prefix}_auto_max_rounds",
-                help="Claude 호출 상한입니다. 보통 2~4회 안에 수렴합니다.",
-            )
+            _col_r, _col_w = st.columns([1, 1])
+            with _col_r:
+                _max_rounds = st.number_input(
+                    "최대 라운드 수",
+                    min_value=1, max_value=6, value=2, step=1,
+                    key=f"{key_prefix}_auto_max_rounds",
+                    help="Claude 호출 상한입니다. 보통 1~2회면 핵심 오류가 잡힙니다. "
+                         "라운드가 늘수록 비용도 비례해서 늘어납니다.",
+                )
+            with _col_w:
+                _use_web = st.checkbox(
+                    "웹검색 사용",
+                    value=False,
+                    key=f"{key_prefix}_auto_use_web",
+                    help="켜면 Claude가 조문으로 부족할 때 웹을 검색합니다. 정확도가 "
+                         "조금 오를 수 있으나 호출당 별도 과금 + 토큰이 늘어 비용이 "
+                         "크게 증가합니다(문서 1건에 수십 센트~$1). 조항 번호·특례 등 "
+                         "핵심 오류는 웹검색 없이도 대부분 잡히니 기본은 꺼두는 것을 권합니다.",
+                )
+            # 대략적 비용 안내 — 문서 길이에 따라 라운드당 비용을 러프하게 추정
+            _doc_len = len(current_document or "")
+            if _use_web:
+                st.caption(
+                    "⚠️ 웹검색 ON: 문서 1건당 대략 수십 센트~$1까지 나올 수 있습니다. "
+                    "긴 종합문서일수록 비쌉니다. 정말 필요할 때만 켜세요."
+                )
+            elif _doc_len > 6000:
+                st.caption(
+                    "이 문서는 다소 길어(입력 토큰이 큼) 라운드당 대략 몇 센트 정도가 "
+                    "예상됩니다. 웹검색을 껐으므로 부담은 크지 않습니다."
+                )
+            else:
+                st.caption("웹검색 OFF 기준, 문서 1건당 보통 1~5센트 수준입니다.")
             if st.button(
                 "🤖 Claude로 자동 교차검증 실행",
                 key=f"{key_prefix}_auto_run_btn_{current_round}",
@@ -1149,6 +1179,7 @@ def render_confirm_to_kb_workspace():
                         current_document=current_document,
                         max_rounds=int(_max_rounds),
                         prev_change_summary=(doc_rounds[-1]["change_summary"] if doc_rounds else ""),
+                        enable_web_search=bool(_use_web),
                         on_step=_backup_step,
                     )
 
@@ -1180,15 +1211,28 @@ def render_confirm_to_kb_workspace():
                     _rounds[-1]["next_prompt"] = st.session_state[next_prompt_key]
 
                 # 종료 사유 메시지 구성 (rerun 후 화면에 표시하기 위해 세션에 저장)
+                #
+                # 안전 원칙(v1.11.1): "성공(✅)"은 오직 Claude가 명시적으로
+                # [검토완료: 예]를 낸 경우(claude_complete)에만 표시한다.
+                # - "converged": 문서가 안 바뀌어 멈춘 것일 뿐 Claude가 완료를
+                #   선언한 게 아니므로 ✅가 아니라 ⚠️로 표시하고 Claude 최종
+                #   의견을 반드시 확인하게 한다.
+                # - "apply_failed": Claude가 지적했으나 그 지적을 본문에 반영하지
+                #   못한 것이므로 절대 성공이 아니다. 강한 경고로 표시하고,
+                #   회계사가 아래 'Claude의 마지막 검토 의견'을 직접 보고 수동
+                #   반영하도록 안내한다. (과거: 이 경우가 ✅ 수렴으로 잘못
+                #   표시되어, 지적이 반영 안 된 문서를 확정할 위험이 있었음)
                 _n = result["rounds_run"]
                 _applied = len(result["steps"])
                 _reason = result["stop_reason"]
                 if _reason == "claude_complete":
-                    _msg = ("success", f"✅ Claude가 더 고칠 실질적 오류가 없다고 판단해 종료했습니다 (검토 {_n}회, 본문 반영 {_applied}회).")
+                    _msg = ("success", f"✅ Claude가 더 고칠 실질적 오류가 없다고 판단해 종료했습니다 (검토 {_n}회, 본문 반영 {_applied}회). 그래도 최종 확정 전 내용을 한 번 훑어보세요.")
+                elif _reason == "apply_failed":
+                    _msg = ("error", f"❌ Claude가 지적한 내용을 문서에 자동 반영하지 못했습니다(반영 실패). 이 문서에는 Claude의 지적이 아직 반영되지 않았으니 그대로 확정하지 마세요. 아래 'Claude의 마지막 검토 의견'을 직접 확인해 수동으로 반영하거나, 아래 수동 교차검증으로 진행하세요. (긴 종합문서에서 이 실패가 자주 발생합니다)")
                 elif _reason == "converged":
-                    _msg = ("success", f"✅ 문서가 더 이상 바뀌지 않아(수렴) 종료했습니다 (검토 {_n}회, 반영 {_applied}회).")
+                    _msg = ("warning", f"⚠️ 문서가 더 이상 바뀌지 않아 멈췄습니다 (검토 {_n}회, 반영 {_applied}회). 다만 Claude가 '완료'를 선언한 것은 아니므로, 아래 'Claude의 마지막 검토 의견'에 남은 지적이 없는지 꼭 확인하세요.")
                 elif _reason == "max_rounds":
-                    _msg = ("warning", f"⚠️ 최대 {int(_max_rounds)}라운드에 도달해 종료했습니다 (반영 {_applied}회). 필요하면 자동 실행을 한 번 더 누르거나 아래에서 수동으로 더 검증할 수 있습니다.")
+                    _msg = ("warning", f"⚠️ 최대 {int(_max_rounds)}라운드에 도달해 종료했습니다 (반영 {_applied}회). Claude가 완료를 선언한 것은 아니니, 아래 검토 의견을 확인하고 필요하면 자동 실행을 한 번 더 누르거나 수동으로 진행하세요.")
                 else:
                     if result["steps"]:
                         _msg = ("warning", f"⚠️ 자동 교차검증이 중간에 중단됐습니다 (중단 전 {_applied}회 반영): {result['error']}")

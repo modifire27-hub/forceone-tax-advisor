@@ -996,62 +996,62 @@ def render_confirm_to_kb_workspace():
     proceed_key = f"{key_prefix}_proceed_to_confirm"  # bool — "이걸로 확정" 눌렀는지
 
     # ------------------------------------------------------------------
-    # 1라운드: 웹검색 검증 + 자동수정을 한 번에 수행해 "확정 문서 v1" 생성
+    # 1라운드: 원본 답변을 그대로 "교차검증 대상 문서 v1"으로 준비
     # ------------------------------------------------------------------
+    # v1.11.2 변경(B안): 기존에는 여기서 Gemini가 웹검색으로 자체검증하고
+    # 본문을 자동수정(verify_before_confirm)해 1차 문서를 만들었으나, 이
+    # 자체검증 단계가 오히려 "맞는 값을 틀리게" 바꾸는 사례가 확인됨(예:
+    # 납부지연가산세율 2.2/10,000을 2.0으로 바꾸고 없는 시행일을 생성).
+    # 저자 모델(Gemini)이 자기 답을 스스로 검증하면 같은 사각지대에 갇힐 뿐
+    # 아니라 새 오류를 만들 수 있어, 이 자체검증을 제거하고 원본 답변을 곧바로
+    # 독립 검증자(Claude) 교차검증에 넘긴다. 검증 후 본문 수정(반영)은 이후에도
+    # 기존처럼 Gemini(apply_external_feedback)가 담당한다.
     if st.session_state.get(current_doc_key) is None:
-        if st.button("① 웹검색으로 검증하고 1차 확정 문서 만들기", key=f"{key_prefix}_run_verify_btn", type="primary"):
-            with st.spinner("답변 내용을 웹검색으로 검증하고 자동 수정본을 만드는 중입니다..."):
-                verification = engine.verify_before_confirm(question, answer)
+        if st.button("① 교차검증 시작 (원본 답변을 검증 대상으로 준비)", key=f"{key_prefix}_run_verify_btn", type="primary"):
+            # 저장 파일 추천만 가볍게 받아둔다(문서 내용은 건드리지 않음, 웹검색 없음).
+            with st.spinner("교차검증 대상 문서를 준비하는 중입니다..."):
+                try:
+                    rec_file, rec_reason = engine._recommend_knowledge_file(question, answer)
+                except Exception:
+                    rec_file, rec_reason = "", ""
 
-            # 회계사 피드백 반영 (2026-06-28): verify_before_confirm이 만드는
-            # correction_summary는 항목별 짧은 사유를 이어붙인 것이라, "원본과
-            # 1차 문서를 놓고 비교했을 때 결과적으로 무엇이 달라졌는지"를
-            # 한눈에 보여주지 못함. 원본 답변과 1차 확정 문서를 직접 비교해서
-            # 자세한 변경 요약을 새로 만듦 — 2라운드부터 쓰는
-            # apply_external_feedback의 change_summary와 동등한 수준의
-            # 비교 정보를 1라운드에도 제공하기 위함.
-            with st.spinner("원본과 1차 확정 문서를 비교하는 중입니다..."):
-                comparison_summary = engine.summarize_document_changes(
-                    answer, verification["corrected_content"]
-                )
-
-            st.session_state[current_doc_key] = verification["corrected_content"]
+            _init_summary = "- 원본 답변 (Gemini 자체검증 없이 교차검증 대상으로 사용)"
+            st.session_state[current_doc_key] = answer
             st.session_state[rounds_key] = [{
                 "round": 1,
-                "document": verification["corrected_content"],
-                "change_summary": comparison_summary,
-                "verification_detail": verification["verification_text"],
+                "document": answer,
+                "change_summary": _init_summary,
+                "verification_detail": "",
                 "next_prompt": "",  # 아래에서 채움
                 "external_ai_input": "",  # 다음 라운드에서 답변 오면 채움
             }]
-            # 추천 파일/이유는 라운드와 무관하게 마지막 결과를 기준으로 갱신해둠
-            st.session_state[f"{key_prefix}_recommended_file"] = verification["recommended_file"]
-            st.session_state[f"{key_prefix}_recommended_reason"] = verification["recommended_reason"]
+            # 추천 파일/이유(저장 대상 파일 선택용) — 문서 내용과 무관한 분류 결과
+            st.session_state[f"{key_prefix}_recommended_file"] = rec_file
+            st.session_state[f"{key_prefix}_recommended_reason"] = rec_reason
 
-            next_prompt = engine.build_next_round_prompt(
-                question, verification["corrected_content"], comparison_summary
-            )
+            next_prompt = engine.build_next_round_prompt(question, answer, "")
             st.session_state[next_prompt_key] = next_prompt
             st.session_state[rounds_key][0]["next_prompt"] = next_prompt
 
-            # 안전장치 — WebSocket 끊김 대비, 1라운드 결과를 곧바로 백업
+            # 안전장치 — WebSocket 끊김 대비, 1라운드 준비 상태를 곧바로 백업
             if engine.sheet_logger and engine.sheet_logger.enabled:
                 engine.sheet_logger.save_crosscheck_round(
                     session_id=crosscheck_session_id,
                     round_no=1,
                     question=question,
                     original_answer=answer,
-                    verification_text=comparison_summary,
+                    verification_text=_init_summary,
                     cross_prompt=next_prompt,
                     external_ai_input="",
-                    next_verification_text=verification["corrected_content"],
+                    next_verification_text=answer,
                 )
             st.rerun()
         else:
             st.caption(
-                "저장 전에 먼저 내용을 검증해주세요. 1차 검증 후에는 다른 AI에게 교차검증을 "
-                "요청하고 그 의견을 반영해 문서를 더 다듬을 수도 있고, 1차로 충분하다면 곧바로 "
-                "확정할 수도 있습니다."
+                "원본 답변을 그대로 교차검증 대상으로 준비합니다(Gemini 자체검증은 "
+                "하지 않습니다). 준비 후 아래에서 Claude 자동 교차검증을 돌리거나, "
+                "다른 AI에게 수동으로 교차검증을 요청해 문서를 다듬을 수 있습니다. "
+                "충분하다면 곧바로 확정할 수도 있습니다."
             )
             return
 

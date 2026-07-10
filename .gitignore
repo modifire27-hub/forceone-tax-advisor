@@ -22,6 +22,7 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+*.zip
 
 # 가상환경 (혹시 폴더 안에 만들어둔 경우)
 venv/

@@ -489,11 +489,22 @@ class SheetLogger:
                     preview = new_summary_text[:100].replace("\n", " ") + (
                         "..." if len(new_summary_text) > 100 else ""
                     )
-                    # 종합문서요약(3), 종합문서전체(4), 확정여부(6) 컬럼만 갱신.
+                    # 종합문서요약(C=3), 종합문서전체(D=4), 확정여부(F=6) 컬럼만 갱신.
                     # 일시/포함된질의건수/사용자구분(1,2,5)은 원본 그대로 둠.
-                    self.summary_sheet.update_cell(row_idx, 3, preview)
-                    self.summary_sheet.update_cell(row_idx, 4, new_summary_text)
-                    self.summary_sheet.update_cell(row_idx, 6, "확정됨")
+                    #
+                    # 2026-07-10 변경: 예전에는 update_cell을 세 번 따로 호출했는데,
+                    # 중간에 하나만 실패하면 "본문은 최종본인데 확정여부는 미표시"
+                    # 같은 어정쩡한 상태가 남고 API 호출도 3배였음. batch_update로
+                    # 세 칸을 한 번에(원자적으로) 쓰도록 바꿈. append_row와 동일하게
+                    # RAW 입력으로 처리해 시트가 값을 임의 해석하지 않도록 함.
+                    self.summary_sheet.batch_update(
+                        [
+                            {"range": f"C{row_idx}", "values": [[preview]]},
+                            {"range": f"D{row_idx}", "values": [[new_summary_text]]},
+                            {"range": f"F{row_idx}", "values": [["확정됨"]]},
+                        ],
+                        value_input_option="RAW",
+                    )
                     return True
             return False
         except Exception as e:

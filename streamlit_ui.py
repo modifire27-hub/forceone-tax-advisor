@@ -832,6 +832,7 @@ def render_confirm_to_kb_button(
     dialog_row_key: str = None,
     source_summary_timestamp: str = None,
     source_log_timestamp: str = None,
+    already_confirmed: bool = False,
 ):
     """
     '지식베이스에 확정 저장' 버튼만 그림. 누르면 실제 작업 화면은 이 버튼이 있는
@@ -876,6 +877,16 @@ def render_confirm_to_kb_button(
         질문인지 한눈에 알 수 있도록 하기 위함.
     """
     target_key = "kb_confirm_target"
+    # 이미 지식베이스에 확정된 문서라면 '확정 저장' 버튼을 다시 보여주지 않는다.
+    # (이미 확정 배지가 떠 있는데 아래에 또 확정 버튼이 있으면 "이미 확정한 걸
+    #  또 확정"하게 되어 혼란스럽다는 피드백 반영.) 수정이 필요하면 새 질의로
+    # 다시 확정하는 흐름을 쓰도록 안내만 남긴다.
+    if already_confirmed:
+        st.caption(
+            "이미 지식베이스에 확정된 문서입니다. (내용을 바꿔야 하면 새로 질의해 "
+            "다시 확정하세요.)"
+        )
+        return
     if st.button("지식베이스에 확정 저장", key=f"{key_prefix}_confirm_entry_btn"):
         st.session_state[target_key] = {
             "question": question,
@@ -1136,26 +1147,12 @@ def render_confirm_to_kb_workspace():
                         key=f"{key_prefix}_auto_use_web",
                         help="켜면 Claude가 조문으로 부족할 때 웹을 검색합니다. 정확도가 "
                              "조금 오를 수 있으나 호출당 별도 과금 + 토큰이 늘어 비용이 "
-                             "크게 증가합니다(문서 1건에 수십 센트~$1). 조항 번호·특례 등 "
-                             "핵심 오류는 웹검색 없이도 대부분 잡히니 기본은 꺼두는 것을 권합니다.",
+                             "크게 증가합니다. 조항 번호·특례 등 핵심 오류는 웹검색 없이도 "
+                             "대부분 잡히니 기본은 꺼두는 것을 권합니다.",
                     )
-                # 대략적 비용 안내 — 문서 길이에 따라 라운드당 비용을 러프하게 추정
-                _doc_len = len(current_document or "")
-                if _use_web:
-                    st.caption(
-                        "⚠️ 웹검색 ON: 문서 1건당 대략 수십 센트~$1까지 나올 수 있습니다. "
-                        "긴 종합문서일수록 비쌉니다. 정말 필요할 때만 켜세요."
-                    )
-                elif _doc_len > 6000:
-                    st.caption(
-                        "이 문서는 다소 길어(입력 토큰이 큼) 라운드당 대략 몇 센트 정도가 "
-                        "예상됩니다. 웹검색을 껐으므로 부담은 크지 않습니다."
-                    )
-                else:
-                    st.caption("웹검색 OFF 기준, 문서 1건당 보통 1~5센트 수준입니다.")
                 st.caption(
-                    "⚠️ API 호출은 응답이 비정상 종료돼도 과금될 수 있습니다. 아래 실행 "
-                    "중 오류가 나면 콘솔 Billing에서 사용량을 한 번 확인해보세요."
+                    "⚠️ API 호출은 응답이 비정상 종료돼도 과금될 수 있습니다. 실행 중 "
+                    "오류가 나면 콘솔 Billing에서 사용량을 한 번 확인해보세요."
                 )
                 if st.button(
                     "🤖 Claude로 자동 교차검증 실행",
@@ -1521,6 +1518,10 @@ def show_log_dialog():
                 question=question, answer=answer, key_prefix=dialog_key_base,
                 dialog_row_key="_dialog_log_row",
                 source_log_timestamp=row.get("일시", ""),
+                already_confirmed=(
+                    row.get("확정여부") == "확정됨"
+                    or bool(st.session_state.get(f"{dialog_key_base}_kb_confirmed"))
+                ),
             )
 
     with col3:
@@ -1625,6 +1626,10 @@ def show_summary_log_dialog():
                 key_prefix=dialog_key_base,
                 dialog_row_key="_dialog_summary_row",
                 source_summary_timestamp=row.get("일시", ""),
+                already_confirmed=(
+                    row.get("확정여부") == "확정됨"
+                    or bool(st.session_state.get(f"{dialog_key_base}_kb_confirmed"))
+                ),
             )
 
     with col3:
@@ -2312,6 +2317,7 @@ if st.session_state.current_thread:
                     render_confirm_to_kb_button(
                         question=qa["question"], answer=qa["answer"], key_prefix=f"cur_{qa_key}",
                         source_log_timestamp=qa.get("log_ts"),
+                        already_confirmed=bool(st.session_state.get(f"cur_{qa_key}_kb_confirmed")),
                     )
 
     # ------------------------------------------------------------------
@@ -2381,6 +2387,7 @@ if st.session_state.current_thread:
                     answer=st.session_state.summary_doc,
                     key_prefix="summary_cur",
                     source_summary_timestamp=st.session_state.get("summary_doc_source_ts"),
+                    already_confirmed=bool(st.session_state.get("summary_cur_kb_confirmed")),
                 )
 else:
     st.info("새 질문을 입력하면 여기서 대화가 시작됩니다.")
@@ -2452,6 +2459,7 @@ if st.session_state.backlog:
                                 answer=st.session_state[backlog_summary_key],
                                 key_prefix=backlog_summary_key,
                                 source_summary_timestamp=st.session_state.get(f"{backlog_summary_key}_source_ts"),
+                                already_confirmed=bool(st.session_state.get(f"{backlog_summary_key}_kb_confirmed")),
                             )
                 with col2:
                     if st.button("이 묶음 삭제", key=f"delete_backlog_{b_idx}"):

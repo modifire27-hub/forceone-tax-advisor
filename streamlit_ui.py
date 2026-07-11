@@ -1685,124 +1685,6 @@ with st.sidebar:
         st.rerun()
 
     if is_admin:
-        # ── 📚 확정 지식베이스 조회/검색 ──────────────────────────────
-        # 확정 저장된 지식베이스 항목을 한눈에 훑고 키워드로 검색한다.
-        # 목록에는 '요지(한 문장)'와 '키워드'를 보여주고(없으면 앞부분 발췌로 대체),
-        # 각 항목은 '전체 보기'로 확정내용 전문을 확인할 수 있다.
-        st.divider()
-        st.subheader("📚 확정 지식베이스 조회")
-        _kb_enabled = bool(getattr(engine, "sheet_logger", None)) and engine.sheet_logger.enabled
-        if not _kb_enabled:
-            st.caption("구글시트 연동이 꺼져 있어 확정 지식베이스를 조회할 수 없습니다.")
-        else:
-            with st.expander("확정 내용 검색 / 목록", expanded=False):
-                _kw = st.text_input(
-                    "검색어 (질문·분류·키워드·내용 중 아무거나, 여러 단어는 모두 포함되는 항목만)",
-                    key="kb_browse_query",
-                    placeholder="예: 가지급금 인정이자",
-                ).strip()
-                try:
-                    _kb_entries = engine.sheet_logger.get_recent_knowledge_entries(limit=1000)
-                except Exception:
-                    _kb_entries = []
-
-                # 키워드/요지가 아직 없는 항목이 있으면 일괄 생성 버튼을 노출
-                _missing = [
-                    e for e in _kb_entries
-                    if not (e.get("키워드", "") or "").strip()
-                    and not (e.get("요지", "") or "").strip()
-                ]
-                if _missing:
-                    st.caption(
-                        f"키워드·요지가 아직 없는 항목이 {len(_missing)}건 있습니다. "
-                        "아래 버튼으로 한 번에 생성할 수 있습니다(항목당 저렴한 Gemini 호출 1회)."
-                    )
-                    if st.button("🔑 기존 항목 키워드·요지 일괄 생성", key="kb_backfill_btn"):
-                        rows = engine.sheet_logger.get_all_knowledge_rows()
-                        targets = [
-                            (rn, rec) for (rn, rec) in rows
-                            if not (rec.get("키워드", "") or "").strip()
-                            and not (rec.get("요지", "") or "").strip()
-                        ]
-                        if not targets:
-                            st.info("생성할 대상이 없습니다.")
-                        else:
-                            prog = st.progress(0.0, text="키워드·요지 생성 중...")
-                            done = 0
-                            ok = 0
-                            for rn, rec in targets:
-                                kw, gist = engine.extract_keywords_and_gist(
-                                    rec.get("질문", ""), rec.get("확정내용", "")
-                                )
-                                if kw or gist:
-                                    if engine.sheet_logger.update_knowledge_meta(rn, kw, gist):
-                                        ok += 1
-                                done += 1
-                                prog.progress(done / len(targets), text=f"{done}/{len(targets)} 처리 중...")
-                            prog.empty()
-                            st.success(f"완료: {len(targets)}건 중 {ok}건에 키워드·요지를 생성했습니다.")
-                            st.rerun()
-
-                if not _kb_entries:
-                    st.caption("아직 확정된 지식베이스 항목이 없습니다.")
-                else:
-                    _tokens = _kw.lower().split()
-
-                    def _match(e):
-                        if not _tokens:
-                            return True
-                        hay = (
-                            f"{e.get('분류','')} {e.get('질문','')} "
-                            f"{e.get('키워드','')} {e.get('요지','')} "
-                            f"{e.get('확정내용','')}"
-                        ).lower()
-                        return all(tok in hay for tok in _tokens)  # AND 검색
-
-                    _filtered = [e for e in _kb_entries if _match(e)]
-                    st.caption(f"전체 {len(_kb_entries)}건 중 {len(_filtered)}건 (최신순)")
-
-                    _SHOW_CAP = 40
-                    for _i, e in enumerate(_filtered[:_SHOW_CAP]):
-                        _q = (e.get("질문", "") or "").strip() or "(질문 없음)"
-                        _cat = (e.get("분류", "") or "").strip()
-                        _ts = (e.get("일시", "") or "").strip()
-                        _content = (e.get("확정내용", "") or "").strip()
-                        _kw_val = (e.get("키워드", "") or "").strip()
-                        _gist_val = (e.get("요지", "") or "").strip()
-
-                        st.markdown(f"**{_q}**")
-                        _meta = " · ".join([x for x in [_ts, _cat] if x])
-                        if _meta:
-                            st.caption(_meta)
-                        # 취지: 저장된 요지 우선, 없으면 본문 앞부분 발췌로 대체
-                        if _gist_val:
-                            st.write(f"📝 {_gist_val}")
-                        else:
-                            _excerpt = " ".join(_content.split())
-                            if len(_excerpt) > 150:
-                                _excerpt = _excerpt[:150] + " …"
-                            if _excerpt:
-                                st.write(_excerpt)
-                        if _kw_val:
-                            st.caption(f"🔑 {_kw_val}")
-                        # 전체 확정내용은 팝오버로 (요청: 누르면 전체 표시)
-                        try:
-                            with st.popover("전체 보기"):
-                                render_copyable_text(
-                                    _content or "(내용 없음)",
-                                    key=f"kb_full_{_i}_{_ts}",
-                                    label="복사",
-                                )
-                        except Exception:
-                            # 구버전 등으로 popover가 없으면 조용히 생략(취지·키워드로 충분)
-                            pass
-                        st.divider()
-                    if len(_filtered) > _SHOW_CAP:
-                        st.caption(
-                            f"…이하 {len(_filtered) - _SHOW_CAP}건은 검색어로 더 "
-                            "좁혀서 확인하세요."
-                        )
-
         st.divider()
         st.subheader("확정 PIN 관리")
         st.caption("AI 답변을 지식베이스에 확정 저장할 때 필요한 PIN입니다. 회계사만 알아야 합니다.")
@@ -2057,143 +1939,201 @@ with st.sidebar:
                                 st.rerun()
 
     st.divider()
-    st.subheader("검색 기록")
-    st.caption("개별 질문 하나하나에 대한 답변 기록입니다.")
-    if engine.sheet_logger and engine.sheet_logger.enabled:
-        st.success("구글 시트 로깅 사용 중")
-        n_logs = st.slider("불러올 최근 기록 수", min_value=10, max_value=200, value=30, step=10)
-        search_term = st.text_input("질문 내용 검색 (비워두면 전체 표시)", key="log_search_term")
-
-        if st.button("기록 불러오기", key="load_logs_btn"):
-            with st.spinner("구글 시트에서 기록을 불러오는 중..."):
-                recent = engine.sheet_logger.get_recent_logs(n_logs)
-            st.session_state["_loaded_logs"] = recent
-
-        loaded = st.session_state.get("_loaded_logs", [])
-        if loaded:
-            filtered = loaded
-            if search_term.strip():
-                filtered = [
-                    row for row in loaded
-                    if search_term.strip() in row.get("질문", "")
-                ]
-            st.caption(f"{len(filtered)}건 표시 (전체 불러온 기록 {len(loaded)}건 중)")
-
-            for idx, row in enumerate(filtered):
-                badge = "✅ " if row.get("확정여부") == "확정됨" else ""
-                label = f"{badge}{row.get('일시', '')} | {row.get('사용자구분', '')} | {row.get('질문', '')[:30]}"
-                if st.button(label, key=f"log_open_{idx}", use_container_width=True):
-                    st.session_state["_dialog_log_row"] = row
-                    show_log_dialog()
-        else:
-            st.write("위 '기록 불러오기' 버튼을 눌러 구글 시트에서 기록을 가져오세요.")
-    else:
-        # enabled=False인 두 가지 경우를 구분해서 보여줌:
-        # (1) 아예 설정을 안 한 경우 (error_message가 비어있음) → 안내문만 표시
-        # (2) 설정을 시도했는데 실패한 경우 (error_message가 있음) → 실제 실패 원인을 그대로 보여줌
-        #     (이전에는 두 경우 모두 같은 안내문으로 뭉뚱그려져서, 실제로 무엇이 잘못됐는지
-        #     화면만 보고는 알 수 없었음. 진단을 쉽게 하기 위해 분리함.)
-        error_msg = engine.sheet_logger.error_message if engine.sheet_logger else ""
-        if error_msg:
-            st.error(f"구글 시트 로깅 설정을 시도했지만 실패했습니다.\n\n원인: {error_msg}")
-        else:
-            st.info(
-                "구글 시트 로깅 미사용.\n\n"
-                "- 로컬 환경: `.env`에 GOOGLE_SHEET_ID, GOOGLE_CREDENTIALS_PATH를 설정하세요.\n"
-                "- 웹 배포 환경: Streamlit Secrets에 GOOGLE_SHEET_ID, GOOGLE_CREDENTIALS_JSON을 설정하세요.\n\n"
-                "설정하면 모든 질의응답이 구글 스프레드시트에 자동 기록됩니다."
-            )
-
-    st.divider()
-    st.subheader("종합 문서 기록")
-    st.caption(
-        "여러 질문을 묶어 재구성한 종합 문서 기록입니다. "
-        "'종합 문서 생성' 시점에 자동으로 여기에 남습니다 "
-        "(개별 질문 기록과는 별도 탭에 저장되어 섞이지 않습니다). "
-        "✅ 확정됨 표시가 없으면 검증 절차를 거치지 않은 AI 생성 문서이니 참고하세요."
+    _sb_view = st.radio(
+        "🗂 사이드바 보기",
+        ["기록·문서", "지식베이스 조회"],
+        key="sb_view",
+        help="한 번에 한 종류만 보여 사이드바 스크롤을 줄입니다. 필요할 때 전환하세요.",
     )
-    if engine.sheet_logger and engine.sheet_logger.enabled:
-        n_summaries = st.slider(
-            "불러올 최근 종합 문서 수", min_value=5, max_value=100, value=20, step=5, key="n_summaries_slider"
-        )
 
-        if st.button("종합 문서 기록 불러오기", key="load_summaries_btn"):
-            with st.spinner("구글 시트에서 종합 문서 기록을 불러오는 중..."):
-                recent_summaries = engine.sheet_logger.get_recent_summaries(n_summaries)
-            st.session_state["_loaded_summaries"] = recent_summaries
+    if _sb_view == "기록·문서":
+        st.divider()
+        st.subheader("검색 기록")
+        st.caption("개별 질문 하나하나에 대한 답변 기록입니다.")
+        if engine.sheet_logger and engine.sheet_logger.enabled:
+            st.success("구글 시트 로깅 사용 중")
+            n_logs = st.slider("불러올 최근 기록 수", min_value=10, max_value=200, value=30, step=10)
+            search_term = st.text_input("질문 내용 검색 (비워두면 전체 표시)", key="log_search_term")
 
-        loaded_summaries = st.session_state.get("_loaded_summaries", [])
-        if loaded_summaries:
-            st.caption(f"{len(loaded_summaries)}건 표시")
-            for idx, row in enumerate(loaded_summaries):
-                badge = "✅ " if row.get("확정여부") == "확정됨" else "⚠️ "
-                label = (
-                    f"{badge}{row.get('일시', '')} | 질의 {row.get('포함된질의건수', '?')}건 | "
-                    f"{row.get('종합문서요약', '')[:30]}"
-                )
-                if st.button(label, key=f"summary_open_{idx}", use_container_width=True):
-                    st.session_state["_dialog_summary_row"] = row
-                    show_summary_log_dialog()
-        else:
-            st.write("위 '종합 문서 기록 불러오기' 버튼을 눌러 구글 시트에서 가져오세요.")
-    else:
-        st.info("구글 시트 로깅 미사용 상태라 종합 문서 기록도 사용할 수 없습니다.")
+            if st.button("기록 불러오기", key="load_logs_btn"):
+                with st.spinner("구글 시트에서 기록을 불러오는 중..."):
+                    recent = engine.sheet_logger.get_recent_logs(n_logs)
+                st.session_state["_loaded_logs"] = recent
 
-    st.divider()
-    st.subheader("확정 지식베이스 조회")
-    st.caption(
-        "지식베이스에 확정 저장된 문서들을 한눈에 조회하고 검색합니다. "
-        "목록에는 전체 문구가 아니라 분류·질문과 내용의 취지(앞부분)만 보여주며, "
-        "각 항목을 펼치면 전체 확정내용을 볼 수 있습니다. 분류·질문·내용 어디에나 "
-        "검색어가 들어간 항목을 걸러냅니다."
-    )
-    if engine.sheet_logger and engine.sheet_logger.enabled:
-        if st.button("확정 지식베이스 불러오기", key="load_kb_entries_btn"):
-            with st.spinner("구글 시트에서 확정 지식베이스를 불러오는 중..."):
-                st.session_state["_loaded_kb_entries"] = (
-                    engine.sheet_logger.get_recent_knowledge_entries(limit=1000)
-                )
+            loaded = st.session_state.get("_loaded_logs", [])
+            if loaded:
+                filtered = loaded
+                if search_term.strip():
+                    filtered = [
+                        row for row in loaded
+                        if search_term.strip() in row.get("질문", "")
+                    ]
+                st.caption(f"{len(filtered)}건 표시 (전체 불러온 기록 {len(loaded)}건 중)")
 
-        kb_entries = st.session_state.get("_loaded_kb_entries", [])
-        if kb_entries:
-            kb_query = st.text_input(
-                "검색어 (분류·질문·내용에서 찾기)",
-                key="kb_search_query",
-                placeholder="예: 간이과세, 가지급금, 기업업무추진비...",
-            )
-            _q = (kb_query or "").strip().lower()
-            if _q:
-                filtered = [
-                    e for e in kb_entries
-                    if _q in str(e.get("분류", "")).lower()
-                    or _q in str(e.get("질문", "")).lower()
-                    or _q in str(e.get("확정내용", "")).lower()
-                ]
+                for idx, row in enumerate(filtered):
+                    badge = "✅ " if row.get("확정여부") == "확정됨" else ""
+                    label = f"{badge}{row.get('일시', '')} | {row.get('사용자구분', '')} | {row.get('질문', '')[:30]}"
+                    if st.button(label, key=f"log_open_{idx}", use_container_width=True):
+                        st.session_state["_dialog_log_row"] = row
+                        show_log_dialog()
             else:
-                filtered = kb_entries
-
-            st.caption(f"전체 {len(kb_entries)}건 중 {len(filtered)}건 표시")
-            if not filtered:
-                st.write("검색어에 맞는 항목이 없습니다.")
-            for idx, e in enumerate(filtered):
-                _cat = (str(e.get("분류", "")).strip() or "미분류")
-                _date = str(e.get("일시", ""))
-                _quest = str(e.get("질문", "")).strip()
-                _content = str(e.get("확정내용", "")).strip()
-                # 목록에 보일 취지: 질문(짧게) + 내용 앞부분 한 줄
-                _gist_src = _quest if _quest else _content
-                _gist = " ".join(_gist_src.split())[:45]
-                _label = f"[{_cat}] {_gist}…" if _gist else f"[{_cat}] (내용 없음)"
-                with st.expander(_label, expanded=False):
-                    st.markdown(f"**확정일시:** {_date}  ·  **분류:** {_cat}")
-                    if _quest:
-                        st.markdown(f"**질문:** {_quest}")
-                    st.markdown("**확정내용:**")
-                    render_copyable_text(_content, key=f"kb_full_{idx}")
+                st.write("위 '기록 불러오기' 버튼을 눌러 구글 시트에서 기록을 가져오세요.")
         else:
-            st.write("위 '확정 지식베이스 불러오기' 버튼을 눌러 가져오세요.")
-    else:
-        st.info("구글 시트 로깅 미사용 상태라 확정 지식베이스 조회를 사용할 수 없습니다.")
+            # enabled=False인 두 가지 경우를 구분해서 보여줌:
+            # (1) 아예 설정을 안 한 경우 (error_message가 비어있음) → 안내문만 표시
+            # (2) 설정을 시도했는데 실패한 경우 (error_message가 있음) → 실제 실패 원인을 그대로 보여줌
+            #     (이전에는 두 경우 모두 같은 안내문으로 뭉뚱그려져서, 실제로 무엇이 잘못됐는지
+            #     화면만 보고는 알 수 없었음. 진단을 쉽게 하기 위해 분리함.)
+            error_msg = engine.sheet_logger.error_message if engine.sheet_logger else ""
+            if error_msg:
+                st.error(f"구글 시트 로깅 설정을 시도했지만 실패했습니다.\n\n원인: {error_msg}")
+            else:
+                st.info(
+                    "구글 시트 로깅 미사용.\n\n"
+                    "- 로컬 환경: `.env`에 GOOGLE_SHEET_ID, GOOGLE_CREDENTIALS_PATH를 설정하세요.\n"
+                    "- 웹 배포 환경: Streamlit Secrets에 GOOGLE_SHEET_ID, GOOGLE_CREDENTIALS_JSON을 설정하세요.\n\n"
+                    "설정하면 모든 질의응답이 구글 스프레드시트에 자동 기록됩니다."
+                )
+
+        st.divider()
+        st.subheader("종합 문서 기록")
+        st.caption(
+            "여러 질문을 묶어 재구성한 종합 문서 기록입니다. "
+            "'종합 문서 생성' 시점에 자동으로 여기에 남습니다 "
+            "(개별 질문 기록과는 별도 탭에 저장되어 섞이지 않습니다). "
+            "✅ 확정됨 표시가 없으면 검증 절차를 거치지 않은 AI 생성 문서이니 참고하세요."
+        )
+        if engine.sheet_logger and engine.sheet_logger.enabled:
+            n_summaries = st.slider(
+                "불러올 최근 종합 문서 수", min_value=5, max_value=100, value=20, step=5, key="n_summaries_slider"
+            )
+
+            if st.button("종합 문서 기록 불러오기", key="load_summaries_btn"):
+                with st.spinner("구글 시트에서 종합 문서 기록을 불러오는 중..."):
+                    recent_summaries = engine.sheet_logger.get_recent_summaries(n_summaries)
+                st.session_state["_loaded_summaries"] = recent_summaries
+
+            loaded_summaries = st.session_state.get("_loaded_summaries", [])
+            if loaded_summaries:
+                st.caption(f"{len(loaded_summaries)}건 표시")
+                for idx, row in enumerate(loaded_summaries):
+                    badge = "✅ " if row.get("확정여부") == "확정됨" else "⚠️ "
+                    label = (
+                        f"{badge}{row.get('일시', '')} | 질의 {row.get('포함된질의건수', '?')}건 | "
+                        f"{row.get('종합문서요약', '')[:30]}"
+                    )
+                    if st.button(label, key=f"summary_open_{idx}", use_container_width=True):
+                        st.session_state["_dialog_summary_row"] = row
+                        show_summary_log_dialog()
+            else:
+                st.write("위 '종합 문서 기록 불러오기' 버튼을 눌러 구글 시트에서 가져오세요.")
+        else:
+            st.info("구글 시트 로깅 미사용 상태라 종합 문서 기록도 사용할 수 없습니다.")
+
+    elif _sb_view == "지식베이스 조회":
+        st.divider()
+        st.subheader("확정 지식베이스 조회")
+        st.caption(
+            "지식베이스에 확정 저장된 문서들을 한눈에 조회하고 검색합니다. "
+            "목록에는 요지(한 문장)와 키워드를 보여주고, 각 항목을 펼치면 전체 "
+            "확정내용을 볼 수 있습니다. 분류·질문·키워드·요지·내용 어디에나 검색어가 "
+            "들어간 항목을 걸러냅니다."
+        )
+        if engine.sheet_logger and engine.sheet_logger.enabled:
+            if st.button("확정 지식베이스 불러오기", key="load_kb_entries_btn"):
+                with st.spinner("구글 시트에서 확정 지식베이스를 불러오는 중..."):
+                    st.session_state["_loaded_kb_entries"] = (
+                        engine.sheet_logger.get_recent_knowledge_entries(limit=1000)
+                    )
+
+            kb_entries = st.session_state.get("_loaded_kb_entries", [])
+            if kb_entries:
+                # 키워드·요지가 아직 없는 항목이 있으면 일괄 생성 버튼 노출
+                _kb_missing = [
+                    e for e in kb_entries
+                    if not (e.get("키워드", "") or "").strip()
+                    and not (e.get("요지", "") or "").strip()
+                ]
+                if _kb_missing:
+                    st.caption(
+                        f"키워드·요지가 아직 없는 항목이 {len(_kb_missing)}건 있습니다. "
+                        "아래 버튼으로 한 번에 생성할 수 있습니다(항목당 저렴한 Gemini 호출 1회). "
+                        "중간에 멈춰도 다시 누르면 남은 것만 이어서 처리합니다."
+                    )
+                    if st.button("🔑 기존 항목 키워드·요지 일괄 생성", key="kb_backfill_btn"):
+                        rows = engine.sheet_logger.get_all_knowledge_rows()
+                        targets = [
+                            (rn, rec) for (rn, rec) in rows
+                            if not (rec.get("키워드", "") or "").strip()
+                            and not (rec.get("요지", "") or "").strip()
+                        ]
+                        if not targets:
+                            st.info("생성할 대상이 없습니다.")
+                        else:
+                            prog = st.progress(0.0, text="키워드·요지 생성 중...")
+                            done = ok = 0
+                            for rn, rec in targets:
+                                kw, gist = engine.extract_keywords_and_gist(
+                                    rec.get("질문", ""), rec.get("확정내용", "")
+                                )
+                                if (kw or gist) and engine.sheet_logger.update_knowledge_meta(rn, kw, gist):
+                                    ok += 1
+                                done += 1
+                                prog.progress(done / len(targets), text=f"{done}/{len(targets)} 처리 중...")
+                            prog.empty()
+                            # 방금 갱신한 내용을 화면에도 반영하기 위해 다시 불러옴
+                            st.session_state["_loaded_kb_entries"] = (
+                                engine.sheet_logger.get_recent_knowledge_entries(limit=1000)
+                            )
+                            st.success(f"완료: {len(targets)}건 중 {ok}건에 키워드·요지를 생성했습니다.")
+                            st.rerun()
+
+                kb_query = st.text_input(
+                    "검색어 (분류·질문·키워드·요지·내용에서 찾기)",
+                    key="kb_search_query",
+                    placeholder="예: 간이과세, 가지급금, 기업업무추진비...",
+                )
+                _q = (kb_query or "").strip().lower()
+                if _q:
+                    filtered = [
+                        e for e in kb_entries
+                        if _q in str(e.get("분류", "")).lower()
+                        or _q in str(e.get("질문", "")).lower()
+                        or _q in str(e.get("키워드", "")).lower()
+                        or _q in str(e.get("요지", "")).lower()
+                        or _q in str(e.get("확정내용", "")).lower()
+                    ]
+                else:
+                    filtered = kb_entries
+
+                st.caption(f"전체 {len(kb_entries)}건 중 {len(filtered)}건 표시")
+                if not filtered:
+                    st.write("검색어에 맞는 항목이 없습니다.")
+                for idx, e in enumerate(filtered):
+                    _cat = (str(e.get("분류", "")).strip() or "미분류")
+                    _date = str(e.get("일시", ""))
+                    _quest = str(e.get("질문", "")).strip()
+                    _content = str(e.get("확정내용", "")).strip()
+                    _kw_val = str(e.get("키워드", "")).strip()
+                    _gist_val = str(e.get("요지", "")).strip()
+                    # 목록 라벨: 요지 우선(없으면 질문/내용 앞부분)
+                    _label_src = _gist_val or _quest or _content
+                    _label_gist = " ".join(_label_src.split())[:50]
+                    _label = f"[{_cat}] {_label_gist}…" if _label_gist else f"[{_cat}] (내용 없음)"
+                    with st.expander(_label, expanded=False):
+                        st.markdown(f"**확정일시:** {_date}  ·  **분류:** {_cat}")
+                        if _gist_val:
+                            st.markdown(f"**요지:** {_gist_val}")
+                        if _kw_val:
+                            st.markdown(f"**키워드:** {_kw_val}")
+                        if _quest:
+                            st.markdown(f"**질문:** {_quest}")
+                        st.markdown("**확정내용:**")
+                        render_copyable_text(_content, key=f"kb_full_{idx}")
+            else:
+                st.write("위 '확정 지식베이스 불러오기' 버튼을 눌러 가져오세요.")
+        else:
+            st.info("구글 시트 로깅 미사용 상태라 확정 지식베이스 조회를 사용할 수 없습니다.")
 
     st.divider()
     with st.expander("진단 정보 (문제 발생 시 확인용)", expanded=False):

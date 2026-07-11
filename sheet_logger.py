@@ -58,7 +58,7 @@ class SheetLogger:
     #   내용을 다운로드해서 .txt로 정리한 뒤 GitHub에 다시 올리는 방식으로 주기적으로
     #   "승격"시키는 운영 방식을 전제로 함.
     KNOWLEDGE_SHEET_NAME = "지식베이스"
-    KNOWLEDGE_HEADER = ["일시", "분류", "질문", "확정내용"]
+    KNOWLEDGE_HEADER = ["일시", "분류", "질문", "확정내용", "키워드", "요지"]
 
     # 검증대기 탭(워크시트) 이름 및 헤더
     # 설계 의도 (2026-06-27 추가 — WebSocket 연결 끊김으로 인한 작업 손실 방지):
@@ -537,7 +537,8 @@ class SheetLogger:
     # ------------------------------------------------------------------
     # 지식베이스 (구글시트 기반) - 회계사 확정 저장한 새 지식을 누적 보관
     # ------------------------------------------------------------------
-    def add_knowledge_entry(self, category: str, question: str, confirmed_content: str) -> bool:
+    def add_knowledge_entry(self, category: str, question: str, confirmed_content: str,
+                            keywords: str = "", gist: str = "") -> bool:
         """
         회계사가 확정한 새 지식 1건을 '지식베이스' 탭에 한 행으로 추가.
 
@@ -553,6 +554,10 @@ class SheetLogger:
             원래 질문
         confirmed_content : str
             회계사가 검토/수정한 최종 확정 내용
+        keywords : str
+            검색용 키워드(쉼표 구분). 조회 화면에서 빠른 검색·표시에 사용.
+        gist : str
+            핵심 요지 한 문장. 조회 목록에서 취지 표시에 사용.
 
         Returns
         -------
@@ -565,7 +570,7 @@ class SheetLogger:
         try:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self.knowledge_sheet.append_row(
-                [timestamp, category, question, confirmed_content],
+                [timestamp, category, question, confirmed_content, keywords or "", gist or ""],
                 value_input_option="RAW",
             )
             return True
@@ -624,6 +629,41 @@ class SheetLogger:
         except Exception as e:
             print(f"[경고] 지식베이스 시트 조회 실패: {e}")
             return []
+
+    def get_all_knowledge_rows(self) -> list:
+        """
+        '지식베이스' 탭 전체를 (시트행번호, 항목dict) 목록으로 반환.
+        키워드/요지 일괄 생성(백필)이나 특정 행 갱신에 사용.
+        헤더가 1행이므로 데이터는 2행부터 — 시트 행 번호를 함께 돌려준다.
+
+        Returns
+        -------
+        list[tuple[int, dict]]
+            [(row_number, record), ...]  (시트 행 순서 = 오래된→최신). 실패 시 빈 리스트
+        """
+        if not self.enabled or self.knowledge_sheet is None:
+            return []
+        try:
+            records = self.knowledge_sheet.get_all_records()
+            return [(idx + 2, rec) for idx, rec in enumerate(records)]
+        except Exception as e:
+            print(f"[경고] 지식베이스 시트 조회 실패: {e}")
+            return []
+
+    def update_knowledge_meta(self, row_number: int, keywords: str, gist: str) -> bool:
+        """
+        지정한 행의 '키워드'(E열=5)와 '요지'(F열=6)를 갱신.
+        (헤더 순서: 일시1 · 분류2 · 질문3 · 확정내용4 · 키워드5 · 요지6)
+        """
+        if not self.enabled or self.knowledge_sheet is None:
+            return False
+        try:
+            self.knowledge_sheet.update_cell(row_number, 5, keywords or "")
+            self.knowledge_sheet.update_cell(row_number, 6, gist or "")
+            return True
+        except Exception as e:
+            print(f"[경고] 지식베이스 메타 갱신 실패(행 {row_number}): {e}")
+            return False
 
 
     # ------------------------------------------------------------------

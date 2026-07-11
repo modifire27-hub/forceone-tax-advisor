@@ -1686,9 +1686,9 @@ with st.sidebar:
 
     if is_admin:
         # ── 📚 확정 지식베이스 조회/검색 ──────────────────────────────
-        # 확정 저장된 지식베이스 항목(일시/분류/질문/확정내용)을 한눈에 훑고
-        # 키워드로 검색한다. 목록에는 전체 문구가 아니라 '취지(앞부분 발췌)'만
-        # 보여줘, 무엇을 확정해뒀는지 빠르게 파악하는 용도로 쓴다.
+        # 확정 저장된 지식베이스 항목을 한눈에 훑고 키워드로 검색한다.
+        # 목록에는 '요지(한 문장)'와 '키워드'를 보여주고(없으면 앞부분 발췌로 대체),
+        # 각 항목은 '전체 보기'로 확정내용 전문을 확인할 수 있다.
         st.divider()
         st.subheader("📚 확정 지식베이스 조회")
         _kb_enabled = bool(getattr(engine, "sheet_logger", None)) and engine.sheet_logger.enabled
@@ -1697,7 +1697,7 @@ with st.sidebar:
         else:
             with st.expander("확정 내용 검색 / 목록", expanded=False):
                 _kw = st.text_input(
-                    "검색어 (질문·분류·내용 중 아무거나, 여러 단어는 모두 포함되는 항목만)",
+                    "검색어 (질문·분류·키워드·내용 중 아무거나, 여러 단어는 모두 포함되는 항목만)",
                     key="kb_browse_query",
                     placeholder="예: 가지급금 인정이자",
                 ).strip()
@@ -1705,6 +1705,43 @@ with st.sidebar:
                     _kb_entries = engine.sheet_logger.get_recent_knowledge_entries(limit=1000)
                 except Exception:
                     _kb_entries = []
+
+                # 키워드/요지가 아직 없는 항목이 있으면 일괄 생성 버튼을 노출
+                _missing = [
+                    e for e in _kb_entries
+                    if not (e.get("키워드", "") or "").strip()
+                    and not (e.get("요지", "") or "").strip()
+                ]
+                if _missing:
+                    st.caption(
+                        f"키워드·요지가 아직 없는 항목이 {len(_missing)}건 있습니다. "
+                        "아래 버튼으로 한 번에 생성할 수 있습니다(항목당 저렴한 Gemini 호출 1회)."
+                    )
+                    if st.button("🔑 기존 항목 키워드·요지 일괄 생성", key="kb_backfill_btn"):
+                        rows = engine.sheet_logger.get_all_knowledge_rows()
+                        targets = [
+                            (rn, rec) for (rn, rec) in rows
+                            if not (rec.get("키워드", "") or "").strip()
+                            and not (rec.get("요지", "") or "").strip()
+                        ]
+                        if not targets:
+                            st.info("생성할 대상이 없습니다.")
+                        else:
+                            prog = st.progress(0.0, text="키워드·요지 생성 중...")
+                            done = 0
+                            ok = 0
+                            for rn, rec in targets:
+                                kw, gist = engine.extract_keywords_and_gist(
+                                    rec.get("질문", ""), rec.get("확정내용", "")
+                                )
+                                if kw or gist:
+                                    if engine.sheet_logger.update_knowledge_meta(rn, kw, gist):
+                                        ok += 1
+                                done += 1
+                                prog.progress(done / len(targets), text=f"{done}/{len(targets)} 처리 중...")
+                            prog.empty()
+                            st.success(f"완료: {len(targets)}건 중 {ok}건에 키워드·요지를 생성했습니다.")
+                            st.rerun()
 
                 if not _kb_entries:
                     st.caption("아직 확정된 지식베이스 항목이 없습니다.")
@@ -1716,6 +1753,7 @@ with st.sidebar:
                             return True
                         hay = (
                             f"{e.get('분류','')} {e.get('질문','')} "
+                            f"{e.get('키워드','')} {e.get('요지','')} "
                             f"{e.get('확정내용','')}"
                         ).lower()
                         return all(tok in hay for tok in _tokens)  # AND 검색
@@ -1724,21 +1762,40 @@ with st.sidebar:
                     st.caption(f"전체 {len(_kb_entries)}건 중 {len(_filtered)}건 (최신순)")
 
                     _SHOW_CAP = 40
-                    for e in _filtered[:_SHOW_CAP]:
+                    for _i, e in enumerate(_filtered[:_SHOW_CAP]):
                         _q = (e.get("질문", "") or "").strip() or "(질문 없음)"
                         _cat = (e.get("분류", "") or "").strip()
                         _ts = (e.get("일시", "") or "").strip()
                         _content = (e.get("확정내용", "") or "").strip()
-                        # 취지 발췌 — 공백 정리 후 앞부분만
-                        _gist = " ".join(_content.split())
-                        if len(_gist) > 150:
-                            _gist = _gist[:150] + " …"
+                        _kw_val = (e.get("키워드", "") or "").strip()
+                        _gist_val = (e.get("요지", "") or "").strip()
+
                         st.markdown(f"**{_q}**")
                         _meta = " · ".join([x for x in [_ts, _cat] if x])
                         if _meta:
                             st.caption(_meta)
-                        if _gist:
-                            st.write(_gist)
+                        # 취지: 저장된 요지 우선, 없으면 본문 앞부분 발췌로 대체
+                        if _gist_val:
+                            st.write(f"📝 {_gist_val}")
+                        else:
+                            _excerpt = " ".join(_content.split())
+                            if len(_excerpt) > 150:
+                                _excerpt = _excerpt[:150] + " …"
+                            if _excerpt:
+                                st.write(_excerpt)
+                        if _kw_val:
+                            st.caption(f"🔑 {_kw_val}")
+                        # 전체 확정내용은 팝오버로 (요청: 누르면 전체 표시)
+                        try:
+                            with st.popover("전체 보기"):
+                                render_copyable_text(
+                                    _content or "(내용 없음)",
+                                    key=f"kb_full_{_i}_{_ts}",
+                                    label="복사",
+                                )
+                        except Exception:
+                            # 구버전 등으로 popover가 없으면 조용히 생략(취지·키워드로 충분)
+                            pass
                         st.divider()
                     if len(_filtered) > _SHOW_CAP:
                         st.caption(

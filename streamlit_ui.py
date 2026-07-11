@@ -1685,6 +1685,67 @@ with st.sidebar:
         st.rerun()
 
     if is_admin:
+        # ── 📚 확정 지식베이스 조회/검색 ──────────────────────────────
+        # 확정 저장된 지식베이스 항목(일시/분류/질문/확정내용)을 한눈에 훑고
+        # 키워드로 검색한다. 목록에는 전체 문구가 아니라 '취지(앞부분 발췌)'만
+        # 보여줘, 무엇을 확정해뒀는지 빠르게 파악하는 용도로 쓴다.
+        st.divider()
+        st.subheader("📚 확정 지식베이스 조회")
+        _kb_enabled = bool(getattr(engine, "sheet_logger", None)) and engine.sheet_logger.enabled
+        if not _kb_enabled:
+            st.caption("구글시트 연동이 꺼져 있어 확정 지식베이스를 조회할 수 없습니다.")
+        else:
+            with st.expander("확정 내용 검색 / 목록", expanded=False):
+                _kw = st.text_input(
+                    "검색어 (질문·분류·내용 중 아무거나, 여러 단어는 모두 포함되는 항목만)",
+                    key="kb_browse_query",
+                    placeholder="예: 가지급금 인정이자",
+                ).strip()
+                try:
+                    _kb_entries = engine.sheet_logger.get_recent_knowledge_entries(limit=1000)
+                except Exception:
+                    _kb_entries = []
+
+                if not _kb_entries:
+                    st.caption("아직 확정된 지식베이스 항목이 없습니다.")
+                else:
+                    _tokens = _kw.lower().split()
+
+                    def _match(e):
+                        if not _tokens:
+                            return True
+                        hay = (
+                            f"{e.get('분류','')} {e.get('질문','')} "
+                            f"{e.get('확정내용','')}"
+                        ).lower()
+                        return all(tok in hay for tok in _tokens)  # AND 검색
+
+                    _filtered = [e for e in _kb_entries if _match(e)]
+                    st.caption(f"전체 {len(_kb_entries)}건 중 {len(_filtered)}건 (최신순)")
+
+                    _SHOW_CAP = 40
+                    for e in _filtered[:_SHOW_CAP]:
+                        _q = (e.get("질문", "") or "").strip() or "(질문 없음)"
+                        _cat = (e.get("분류", "") or "").strip()
+                        _ts = (e.get("일시", "") or "").strip()
+                        _content = (e.get("확정내용", "") or "").strip()
+                        # 취지 발췌 — 공백 정리 후 앞부분만
+                        _gist = " ".join(_content.split())
+                        if len(_gist) > 150:
+                            _gist = _gist[:150] + " …"
+                        st.markdown(f"**{_q}**")
+                        _meta = " · ".join([x for x in [_ts, _cat] if x])
+                        if _meta:
+                            st.caption(_meta)
+                        if _gist:
+                            st.write(_gist)
+                        st.divider()
+                    if len(_filtered) > _SHOW_CAP:
+                        st.caption(
+                            f"…이하 {len(_filtered) - _SHOW_CAP}건은 검색어로 더 "
+                            "좁혀서 확인하세요."
+                        )
+
         st.divider()
         st.subheader("확정 PIN 관리")
         st.caption("AI 답변을 지식베이스에 확정 저장할 때 필요한 PIN입니다. 회계사만 알아야 합니다.")
@@ -2020,6 +2081,62 @@ with st.sidebar:
             st.write("위 '종합 문서 기록 불러오기' 버튼을 눌러 구글 시트에서 가져오세요.")
     else:
         st.info("구글 시트 로깅 미사용 상태라 종합 문서 기록도 사용할 수 없습니다.")
+
+    st.divider()
+    st.subheader("확정 지식베이스 조회")
+    st.caption(
+        "지식베이스에 확정 저장된 문서들을 한눈에 조회하고 검색합니다. "
+        "목록에는 전체 문구가 아니라 분류·질문과 내용의 취지(앞부분)만 보여주며, "
+        "각 항목을 펼치면 전체 확정내용을 볼 수 있습니다. 분류·질문·내용 어디에나 "
+        "검색어가 들어간 항목을 걸러냅니다."
+    )
+    if engine.sheet_logger and engine.sheet_logger.enabled:
+        if st.button("확정 지식베이스 불러오기", key="load_kb_entries_btn"):
+            with st.spinner("구글 시트에서 확정 지식베이스를 불러오는 중..."):
+                st.session_state["_loaded_kb_entries"] = (
+                    engine.sheet_logger.get_recent_knowledge_entries(limit=1000)
+                )
+
+        kb_entries = st.session_state.get("_loaded_kb_entries", [])
+        if kb_entries:
+            kb_query = st.text_input(
+                "검색어 (분류·질문·내용에서 찾기)",
+                key="kb_search_query",
+                placeholder="예: 간이과세, 가지급금, 기업업무추진비...",
+            )
+            _q = (kb_query or "").strip().lower()
+            if _q:
+                filtered = [
+                    e for e in kb_entries
+                    if _q in str(e.get("분류", "")).lower()
+                    or _q in str(e.get("질문", "")).lower()
+                    or _q in str(e.get("확정내용", "")).lower()
+                ]
+            else:
+                filtered = kb_entries
+
+            st.caption(f"전체 {len(kb_entries)}건 중 {len(filtered)}건 표시")
+            if not filtered:
+                st.write("검색어에 맞는 항목이 없습니다.")
+            for idx, e in enumerate(filtered):
+                _cat = (str(e.get("분류", "")).strip() or "미분류")
+                _date = str(e.get("일시", ""))
+                _quest = str(e.get("질문", "")).strip()
+                _content = str(e.get("확정내용", "")).strip()
+                # 목록에 보일 취지: 질문(짧게) + 내용 앞부분 한 줄
+                _gist_src = _quest if _quest else _content
+                _gist = " ".join(_gist_src.split())[:45]
+                _label = f"[{_cat}] {_gist}…" if _gist else f"[{_cat}] (내용 없음)"
+                with st.expander(_label, expanded=False):
+                    st.markdown(f"**확정일시:** {_date}  ·  **분류:** {_cat}")
+                    if _quest:
+                        st.markdown(f"**질문:** {_quest}")
+                    st.markdown("**확정내용:**")
+                    render_copyable_text(_content, key=f"kb_full_{idx}")
+        else:
+            st.write("위 '확정 지식베이스 불러오기' 버튼을 눌러 가져오세요.")
+    else:
+        st.info("구글 시트 로깅 미사용 상태라 확정 지식베이스 조회를 사용할 수 없습니다.")
 
     st.divider()
     with st.expander("진단 정보 (문제 발생 시 확인용)", expanded=False):

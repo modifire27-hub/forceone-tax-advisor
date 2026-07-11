@@ -1224,34 +1224,45 @@ def render_confirm_to_kb_workspace():
                     if _rounds:
                         _rounds[-1]["next_prompt"] = st.session_state[next_prompt_key]
 
-                    # 종료 사유 메시지 구성 (rerun 후 화면에 표시하기 위해 세션에 저장)
+                    # 종료 결과 메시지 구성 (rerun 후 표시하기 위해 세션에 저장)
                     #
-                    # 안전 원칙(v1.11.1): "성공(✅)"은 오직 Claude가 명시적으로
-                    # [검토완료: 예]를 낸 경우(claude_complete)에만 표시한다.
-                    # - "converged": 문서가 안 바뀌어 멈춘 것일 뿐 Claude가 완료를
-                    #   선언한 게 아니므로 ✅가 아니라 ⚠️로 표시하고 Claude 최종
-                    #   의견을 반드시 확인하게 한다.
-                    # - "apply_failed": Claude가 지적했으나 그 지적을 본문에 반영하지
-                    #   못한 것이므로 절대 성공이 아니다. 강한 경고로 표시하고,
-                    #   회계사가 아래 'Claude의 마지막 검토 의견'을 직접 보고 수동
-                    #   반영하도록 안내한다. (과거: 이 경우가 ✅ 수렴으로 잘못
-                    #   표시되어, 지적이 반영 안 된 문서를 확정할 위험이 있었음)
+                    # 판정은 Claude의 6등급(S/A/B/C/D/F)을 기준으로 한다.
+                    #   S/A = 확정 가능(초록) → 확정 권유
+                    #   B/C = 확정 가능하나 회계사 판단(연두/노랑) → 확정 or 재실행 선택
+                    #   D/F = 실질 오류(주황/빨강) → 계속 돌렸으나 상한/정체로 멈춘 상태
+                    #   ?   = 등급 파싱 실패 → 회계사 직접 검토
                     _n = result["rounds_run"]
                     _applied = len(result["steps"])
                     _reason = result["stop_reason"]
-                    if _reason == "claude_complete":
-                        _msg = ("success", f"✅ Claude가 더 고칠 실질적 오류가 없다고 판단해 종료했습니다 (검토 {_n}회, 본문 반영 {_applied}회). 그래도 최종 확정 전 내용을 한 번 훑어보세요.")
-                    elif _reason == "apply_failed":
-                        _msg = ("error", f"❌ Claude가 지적한 내용을 문서에 자동 반영하지 못했습니다(반영 실패). 이 문서에는 Claude의 지적이 아직 반영되지 않았으니 그대로 확정하지 마세요. 아래 'Claude의 마지막 검토 의견'을 직접 확인해 수동으로 반영하거나, '✍️ 수동' 탭으로 진행하세요. (긴 종합문서에서 이 실패가 자주 발생합니다)")
-                    elif _reason == "converged":
-                        _msg = ("warning", f"⚠️ 문서가 더 이상 바뀌지 않아 멈췄습니다 (검토 {_n}회, 반영 {_applied}회). 다만 Claude가 '완료'를 선언한 것은 아니므로, 아래 'Claude의 마지막 검토 의견'에 남은 지적이 없는지 꼭 확인하세요.")
-                    elif _reason == "max_rounds":
-                        _msg = ("warning", f"⚠️ 최대 {int(_max_rounds)}라운드에 도달해 종료했습니다 (반영 {_applied}회). Claude가 완료를 선언한 것은 아니니, 아래 검토 의견을 확인하고 필요하면 자동 실행을 한 번 더 누르거나 수동으로 진행하세요.")
-                    else:
+                    _grade = result.get("final_grade", "")
+                    _greason = (result.get("final_reason", "") or "").strip()
+                    _gtail = f" — {_greason}" if _greason else ""
+
+                    if _reason == "apply_failed":
+                        _msg = ("error", f"❌ Claude가 지적한 내용을 문서에 자동 반영하지 못했습니다(반영 실패). 이 문서에는 Claude의 지적이 아직 반영되지 않았으니 그대로 확정하지 마세요. 아래 'Claude의 마지막 검토 의견'을 직접 확인해 수동으로 반영하거나 '✍️ 수동' 탭으로 진행하세요.")
+                    elif _reason == "error":
                         if result["steps"]:
                             _msg = ("warning", f"⚠️ 자동 교차검증이 중간에 중단됐습니다 (중단 전 {_applied}회 반영): {result['error']}")
                         else:
                             _msg = ("error", f"❌ 자동 교차검증을 시작하지 못했습니다: {result['error']}")
+                    elif _grade == "S":
+                        _msg = ("success", f"✅ [S 확정] 더 볼 것이 없는 완성 상태입니다 (검토 {_n}회, 반영 {_applied}회). 확정하셔도 됩니다.{_gtail}")
+                    elif _grade == "A":
+                        _msg = ("success", f"✅ [A 확정가능] 확정해도 됩니다. 완벽하진 않으나 사실관계·결론·수치·조항이 모두 맞습니다 (검토 {_n}회, 반영 {_applied}회).{_gtail}")
+                    elif _grade == "B":
+                        _msg = ("success", f"🟢 [B 보통·개선실익 낮음] 확정하셔도 됩니다. 남은 사항은 사람이 원문으로 확인할 부분이라 더 돌려도 크게 나아지지 않습니다 (검토 {_n}회, 반영 {_applied}회). 확정하거나, 원하시면 한 번 더 돌릴 수 있습니다.{_gtail}")
+                    elif _grade == "C":
+                        _msg = ("warning", f"🟡 [C 보통·개선실익 있음] 확정해도 큰 문제는 없으나, 한 번 더 돌리면 더 정확해질 여지가 있습니다 (검토 {_n}회, 반영 {_applied}회). 확정할지 한 번 더 돌릴지 선택하세요.{_gtail}")
+                    elif _grade in ("D", "F"):
+                        # D/F인데 여기까지 왔다는 건 상한(max_rounds) 또는 정체(stalled)로 멈춘 것
+                        _label = "F 중대오류" if _grade == "F" else "D 미흡"
+                        if _reason == "stalled":
+                            _msg = ("error", f"🟠 [{_label}] 실질 오류가 남아 있는데 수정이 더 진행되지 않고 정체됐습니다 (검토 {_n}회, 반영 {_applied}회). 그대로 확정하지 마시고, 아래 검토 의견을 보고 '✍️ 수동' 탭에서 직접 반영하세요.{_gtail}")
+                        else:
+                            _msg = ("error", f"🟠 [{_label}] 최대 {int(_max_rounds)}라운드에 도달했지만 실질 오류가 남아 있습니다 (반영 {_applied}회). 그대로 확정하지 마시고, 자동 실행을 한 번 더 누르거나 '✍️ 수동' 탭에서 직접 반영하세요.{_gtail}")
+                    else:
+                        # '?' 또는 예상 밖 — 회계사 직접 검토로 안전하게 넘김
+                        _msg = ("warning", f"⚠️ Claude가 등급 판정을 형식대로 내리지 못했습니다 (검토 {_n}회, 반영 {_applied}회). 아래 'Claude의 마지막 검토 의견'을 직접 확인하고 판단하세요.{_gtail}")
                     st.session_state[f"{key_prefix}_auto_msg"] = _msg
                     st.session_state[f"{key_prefix}_auto_final_critique"] = result.get("final_critique", "")
                     st.rerun()

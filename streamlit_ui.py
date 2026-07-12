@@ -632,10 +632,12 @@ st.session_state.setdefault("summary_doc_turns_count", 0)
 st.session_state.setdefault("summary_doc_label", "")
 st.session_state.setdefault("summary_doc_source_ts", None)
 st.session_state.setdefault("kb_confirm_target", None)
+st.session_state.setdefault("kb_dlg_page", 1)
+st.session_state.setdefault("kb_dlg_last_query", "")
 # "저장 옵션"(사이드바) 위젯들의 기본값. 이 위젯들이 실제로 사이드바에서
 # 그려지기 전에(예: st.dialog 팝업 안에서 저장 버튼을 먼저 누르는 경우)
 # offer_downloads()가 이 값을 조회해도 NameError 없이 기본값을 쓰도록 함.
-st.session_state.setdefault("save_formats", ["md"])
+st.session_state.setdefault("save_formats", ["pdf"])
 st.session_state.setdefault("use_custom_filename", False)
 st.session_state.setdefault("custom_filename", "")
 # "확정 저장 실행" 성공 직후 st.rerun()으로 화면을 정리할 때, 성공 메시지가
@@ -799,7 +801,7 @@ def offer_downloads(title: str, question: str, answer: str, filename_hint: str =
     filename = safe_filename(
         custom_filename.strip() if (use_custom_filename and custom_filename.strip()) else filename_hint
     )
-    formats = st.session_state.get("save_formats") or ["md"]
+    formats = st.session_state.get("save_formats") or ["pdf"]
 
     built = build_export_bytes(title=title, question=question, response_md=answer, formats=formats)
 
@@ -1747,11 +1749,52 @@ def show_knowledge_base_dialog():
     else:
         filtered = kb_entries
 
-    st.caption(f"전체 {len(kb_entries)}건 중 {len(filtered)}건 표시")
     if not filtered:
+        st.caption(f"전체 {len(kb_entries)}건 중 0건 표시")
         st.write("검색어에 맞는 항목이 없습니다.")
+        return
 
-    for idx, e in enumerate(filtered):
+    # ── 페이지네이션 ───────────────────────────────────────────────
+    # 팝업 안에서 아래로 길게 늘어지지 않도록 한 페이지에 몇 건만 보여주고
+    # 이전/다음으로 넘긴다. (다이얼로그 안에서는 st.rerun()을 쓰면 팝업이
+    # 닫히므로, 버튼 클릭 시 session_state만 바꾸고 아래에서 그 값을 읽어
+    # 곧바로 해당 페이지를 그린다.)
+    PAGE_SIZE = 5
+    total_pages = max(1, (len(filtered) + PAGE_SIZE - 1) // PAGE_SIZE)
+
+    # 검색어가 바뀌면 1페이지로 되돌림
+    if st.session_state.get("kb_dlg_last_query") != _q:
+        st.session_state["kb_dlg_last_query"] = _q
+        st.session_state["kb_dlg_page"] = 1
+
+    page = int(st.session_state.get("kb_dlg_page", 1))
+    page = max(1, min(page, total_pages))  # 범위 보정
+
+    _c_prev, _c_mid, _c_next = st.columns([1, 2, 1])
+    with _c_prev:
+        if st.button("◀ 이전", key="kb_dlg_prev", disabled=(page <= 1), use_container_width=True):
+            page = max(1, page - 1)
+            st.session_state["kb_dlg_page"] = page
+    with _c_next:
+        if st.button("다음 ▶", key="kb_dlg_next", disabled=(page >= total_pages), use_container_width=True):
+            page = min(total_pages, page + 1)
+            st.session_state["kb_dlg_page"] = page
+    with _c_mid:
+        st.markdown(
+            f"<div style='text-align:center; padding-top:6px;'>"
+            f"{page} / {total_pages} 페이지</div>",
+            unsafe_allow_html=True,
+        )
+
+    _start = (page - 1) * PAGE_SIZE
+    _end = _start + PAGE_SIZE
+    _page_items = filtered[_start:_end]
+    st.caption(
+        f"전체 {len(kb_entries)}건 중 {len(filtered)}건 검색됨 · "
+        f"이 페이지 {_start + 1}~{min(_end, len(filtered))}번째"
+    )
+
+    for idx, e in enumerate(_page_items, start=_start):
         _cat = (str(e.get("분류", "")).strip() or "미분류")
         _date = str(e.get("일시", ""))
         _quest = str(e.get("질문", "")).strip()

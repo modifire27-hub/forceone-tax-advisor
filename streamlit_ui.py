@@ -589,7 +589,7 @@ user_type = "회계사" if is_admin else "직원"
 if st.session_state.get("_logged_in_via_master_reset"):
     st.error(
         "비상 복구용 기본 비밀번호로 로그인했습니다. 보안을 위해 지금 바로 "
-        "사이드바의 '로그인 비밀번호 관리'에서 관리자/직원 비밀번호를 새로 설정해주세요."
+        "'관리' 탭의 '로그인 비밀번호 관리'에서 관리자/직원 비밀번호를 새로 설정해주세요."
     )
 
 
@@ -994,7 +994,7 @@ def render_confirm_to_kb_workspace():
         render_copyable_text(answer, key=f"{key_prefix}_orig_answer")
 
     if not engine.has_pin_set():
-        st.warning("먼저 사이드바에서 확정 PIN을 설정해주세요.")
+        st.warning("먼저 '관리' 탭의 '확정 PIN 관리'에서 확정 PIN을 설정해주세요.")
         return
 
     edited_key = f"{key_prefix}_edited_content"
@@ -1495,7 +1495,7 @@ def render_confirm_to_kb_workspace():
 @st.dialog("검색 기록 상세보기", width="large")
 def show_log_dialog():
     """
-    사이드바 '검색 기록'에서 항목을 클릭하면 뜨는 모달 팝업.
+    '검색 기록' 탭에서 항목의 '열기'를 누르면 뜨는 모달 팝업.
     전체 질문/답변을 보여주고, 그 자리에서 바로 파일 저장 및 지식베이스 확정도 가능.
     (현재 대화 화면의 개별 답변 카드에 있는 기능과 동일한 동작을 과거 기록에 대해서도 제공)
     """
@@ -1552,7 +1552,7 @@ def show_log_dialog():
 
         if st.session_state.get(delete_confirm_key):
             if not engine.has_pin_set():
-                st.warning("먼저 사이드바에서 확정 PIN을 설정해주세요.")
+                st.warning("먼저 '관리' 탭의 '확정 PIN 관리'에서 확정 PIN을 설정해주세요.")
             else:
                 with st.form(f"{dialog_key_base}_delete_form"):
                     st.caption("삭제하면 구글 시트에서 이 행이 완전히 사라지며, 되돌릴 수 없습니다.")
@@ -1585,7 +1585,7 @@ def show_log_dialog():
 @st.dialog("종합 문서 기록 상세보기", width="large")
 def show_summary_log_dialog():
     """
-    사이드바 '종합 문서 기록'에서 항목을 클릭하면 뜨는 모달 팝업.
+    '종합 문서' 탭에서 항목의 '열기'를 누르면 뜨는 모달 팝업.
     종합 문서 전체 내용을 보여주고, 다시 파일로 저장할 수 있음.
 
     설계 변경 (종합문서 지식베이스 확정 기능 추가와 함께):
@@ -1659,7 +1659,7 @@ def show_summary_log_dialog():
 
         if st.session_state.get(delete_confirm_key):
             if not engine.has_pin_set():
-                st.warning("먼저 사이드바에서 확정 PIN을 설정해주세요.")
+                st.warning("먼저 '관리' 탭의 '확정 PIN 관리'에서 확정 PIN을 설정해주세요.")
             else:
                 with st.form(f"{dialog_key_base}_delete_form"):
                     st.caption("삭제하면 구글 시트에서 이 행이 완전히 사라지며, 되돌릴 수 없습니다.")

@@ -915,7 +915,11 @@ def render_confirm_to_kb_button(
         st.session_state.pop(f"{key_prefix}_auto_final_critique", None)
 
         if dialog_row_key:
-            # 다이얼로그 안에서 호출된 경우: 다이얼로그를 닫고 메인 화면으로 이동
+            # 다이얼로그(검색 기록 / 종합 문서 팝업) 안에서 호출된 경우:
+            # 팝업을 닫고, 질의 탭 맨 위의 확정 작업 공간에서 이어가도록 안내한다.
+            # (팝업이 닫히면서 화면이 바뀌므로, 안내는 rerun 후 질의 탭 상단에서
+            #  보이도록 세션에 담아둔다.)
+            st.session_state["_kb_goto_workspace_hint"] = True
             st.session_state[dialog_row_key] = None
             st.rerun()
         else:
@@ -924,14 +928,12 @@ def render_confirm_to_kb_button(
             # st.button()이 True가 되는 순간 Streamlit이 이미 "이 실행이 끝나면
             # 다시 그려라"를 예약해두는데, 그 사이 위에서 session_state를 여러 개
             # 바꿔놓은 상태로(kb_confirm_target 설정, edited_content 제거 등)
-            # 이번 실행의 나머지 부분(같은 반복문의 다른 항목들, 그 아래 "전체
-            # 종합" 섹션 등)이 그대로 이어서 실행됨. 이 어중간한 상태로 나머지
+            # 이번 실행의 나머지 부분이 그대로 이어서 실행됨. 이 어중간한 상태로
             # 스크립트가 끝까지 실행되다 예외가 나면 페이지가 초기 화면으로
-            # 튕기는 현상으로 이어질 수 있음(다이얼로그 경로는 st.rerun()을
-            # 명시적으로 호출해 이런 문제가 없었음 — 두 경로의 유일한 차이).
+            # 튕기는 현상으로 이어질 수 있음.
             # 해결: 다이얼로그 경로와 동일하게 st.rerun()을 명시적으로 호출해,
             # session_state 변경 직후 깨끗하게 다시 시작하도록 통일함.
-            st.info("화면 맨 아래 '지식베이스 확정 저장 작업 공간'으로 이동해 진행해주세요.")
+            st.session_state["_kb_goto_workspace_hint"] = True
             st.rerun()
 
 
@@ -1092,32 +1094,48 @@ def render_confirm_to_kb_workspace():
 
     if not st.session_state.get(proceed_key):
         st.divider()
-        tab_auto, tab_manual = st.tabs(["자동 (Claude)", "수동 (다른 AI 복사/붙여넣기)"])
+
+        # 자동/수동 선택 — st.tabs()는 rerun 때마다 첫 탭으로 되돌아가는 특성이
+        # 있어, 수동으로 작업하다 문서를 반영(rerun)하면 자동 탭으로 튕기는 문제가
+        # 있었음. 라디오는 선택 상태가 session_state에 유지되므로 rerun 후에도
+        # 사용자가 보던 모드가 그대로 남는다.
+        _mode_key = f"{key_prefix}_verify_mode"
+        st.session_state.setdefault(_mode_key, "자동 (Claude)")
+        _mode = st.radio(
+            "교차검증 방식",
+            ["자동 (Claude)", "수동 (다른 AI 복사/붙여넣기)"],
+            key=_mode_key,
+            horizontal=True,
+        )
+        _show_auto = (_mode == "자동 (Claude)")
+        _show_manual = not _show_auto
+
+        # 직전 자동 실행 결과 메시지 / Claude 최종 판단 표시 (모드와 무관하게 항상)
+        # — D/F 판정으로 수동 모드로 넘어온 경우, 수동 모드에서도 Claude의 지적을
+        #   보면서 다른 AI에 물어보고 반영해야 하므로 여기서 함께 보여준다.
+        _auto_msg = st.session_state.get(f"{key_prefix}_auto_msg")
+        if _auto_msg:
+            _lvl, _txt = _auto_msg
+            getattr(st, _lvl, st.info)(_txt)
+            _fc = st.session_state.get(f"{key_prefix}_auto_final_critique", "")
+            if _fc:
+                # 성공이 아니면(경고·실패) Claude의 남은 지적을 놓치지 않도록
+                # 최종 의견을 자동으로 펼쳐서 보여준다.
+                _expand_critique = (_lvl != "success")
+                with st.expander("Claude의 마지막 검토 의견 전체 보기", expanded=_expand_critique):
+                    render_copyable_text(_fc, key=f"{key_prefix}_auto_final_critique_view")
 
         # ══════════════════════════════════════════════════════════════
-        # 탭 1 — Claude 자동 교차검증
+        # 모드 1 — Claude 자동 교차검증
         # ══════════════════════════════════════════════════════════════
         # 서로 다른 벤더인 Claude(Sonnet)를 API로 직접 호출해 "점검 → 본문
-        # 반영"을 자동으로 여러 라운드 반복함. 종료조건은 ①Claude '완료' 신호
+        # 반영"을 자동으로 여러 라운드 반복함. 종료조건은 ①Claude 등급 판정
         # ②본문 무변화(수렴) ③최대 라운드 3중(엔진 참고).
-        with tab_auto:
-            # 직전 자동 실행 결과 메시지 / Claude 최종 판단 표시
-            _auto_msg = st.session_state.get(f"{key_prefix}_auto_msg")
-            if _auto_msg:
-                _lvl, _txt = _auto_msg
-                getattr(st, _lvl, st.info)(_txt)
-                _fc = st.session_state.get(f"{key_prefix}_auto_final_critique", "")
-                if _fc:
-                    # 성공이 아니면(경고·실패) Claude의 남은 지적을 놓치지 않도록
-                    # 최종 의견을 자동으로 펼쳐서 보여준다.
-                    _expand_critique = (_lvl != "success")
-                    with st.expander("Claude의 마지막 검토 의견 전체 보기", expanded=_expand_critique):
-                        render_copyable_text(_fc, key=f"{key_prefix}_auto_final_critique_view")
-
+        if _show_auto:
             if not engine.auto_cross_check_enabled:
                 st.info(
                     "자동 교차검증(Claude)을 쓰려면 Streamlit Secrets에 ANTHROPIC_API_KEY를 "
-                    "추가하세요(공개 저장소이므로 코드에는 넣지 마세요). 지금은 '수동' "
+                    "추가하세요(공개 저장소이므로 코드에는 넣지 마세요). 지금은 '수동' 모드를 "
                     "탭으로 진행할 수 있습니다."
                 )
             else:
@@ -1232,7 +1250,7 @@ def render_confirm_to_kb_workspace():
                     _gtail = f" — {_greason}" if _greason else ""
 
                     if _reason == "apply_failed":
-                        _msg = ("error", f"Claude가 지적한 내용을 문서에 자동 반영하지 못했습니다(반영 실패). 이 문서에는 Claude의 지적이 아직 반영되지 않았으니 그대로 확정하지 마세요. 아래 'Claude의 마지막 검토 의견'을 직접 확인해 수동으로 반영하거나 '수동' 탭으로 진행하세요.")
+                        _msg = ("error", f"Claude가 지적한 내용을 문서에 자동 반영하지 못했습니다(반영 실패). 이 문서에는 Claude의 지적이 아직 반영되지 않았으니 그대로 확정하지 마세요. 아래 'Claude의 마지막 검토 의견'을 직접 확인해 수동으로 반영하거나 '수동' 모드로 전환해 진행하세요.")
                     elif _reason == "error":
                         if result["steps"]:
                             _msg = ("warning", f"자동 교차검증이 중간에 중단됐습니다 (중단 전 {_applied}회 반영): {result['error']}")
@@ -1250,22 +1268,27 @@ def render_confirm_to_kb_workspace():
                         # D/F인데 여기까지 왔다는 건 상한(max_rounds) 또는 정체(stalled)로 멈춘 것
                         _label = "F 중대오류" if _grade == "F" else "D 미흡"
                         if _reason == "stalled":
-                            _msg = ("error", f"[{_label}] 실질 오류가 남아 있는데 수정이 더 진행되지 않고 정체됐습니다 (검토 {_n}회, 반영 {_applied}회). 그대로 확정하지 마시고, 아래 검토 의견을 보고 '수동' 탭에서 직접 반영하세요.{_gtail}")
+                            _msg = ("error", f"[{_label}] 실질 오류가 남아 있는데 수정이 더 진행되지 않고 정체됐습니다 (검토 {_n}회, 반영 {_applied}회). 그대로 확정하지 마시고, 아래 검토 의견을 보고 '수동' 모드로 전환해 직접 반영하세요.{_gtail}")
                         else:
-                            _msg = ("error", f"[{_label}] 최대 {int(_max_rounds)}라운드에 도달했지만 실질 오류가 남아 있습니다 (반영 {_applied}회). 그대로 확정하지 마시고, 자동 실행을 한 번 더 누르거나 '수동' 탭에서 직접 반영하세요.{_gtail}")
+                            _msg = ("error", f"[{_label}] 최대 {int(_max_rounds)}라운드에 도달했지만 실질 오류가 남아 있습니다 (반영 {_applied}회). 그대로 확정하지 마시고, 자동 실행을 한 번 더 누르거나 '수동' 모드로 전환해 직접 반영하세요.{_gtail}")
                     else:
                         # '?' 또는 예상 밖 — 회계사 직접 검토로 안전하게 넘김
                         _msg = ("warning", f"Claude가 등급 판정을 형식대로 내리지 못했습니다 (검토 {_n}회, 반영 {_applied}회). 아래 'Claude의 마지막 검토 의견'을 직접 확인하고 판단하세요.{_gtail}")
                     st.session_state[f"{key_prefix}_auto_msg"] = _msg
                     st.session_state[f"{key_prefix}_auto_final_critique"] = result.get("final_critique", "")
+                    # D/F(실질 오류 잔존)나 반영 실패로 끝났다면, 어차피 사람이
+                    # 수동으로 이어가야 하므로 곧바로 '수동' 모드로 전환해준다.
+                    # (매번 라디오를 다시 눌러야 하는 번거로움 제거)
+                    if _grade in ("D", "F") or _reason == "apply_failed":
+                        st.session_state[_mode_key] = "수동 (다른 AI 복사/붙여넣기)"
                     st.rerun()
 
-                st.caption("자동 반영이 끝난 뒤에도, '수동' 탭에서 라운드를 더 이어가거나 자동 실행을 반복할 수 있습니다.")
+                st.caption("자동 반영이 끝난 뒤에도, '수동' 모드에서 라운드를 더 이어가거나 자동 실행을 반복할 수 있습니다.")
 
         # ══════════════════════════════════════════════════════════════
-        # 탭 2 — (기존) 수동 교차검증: 다른 AI에 복사해서 물어보고 답을 붙여넣음
+        # 모드 2 — (기존) 수동 교차검증: 다른 AI에 복사해서 물어보고 답을 붙여넣음
         # ══════════════════════════════════════════════════════════════
-        with tab_manual:
+        if _show_manual:
             st.markdown(f"#### {current_round}차에 보낼 질문 (다음 라운드 준비)")
             st.caption(
                 "아래 질문을 복사해서 다른 AI(ChatGPT, claude.ai 등)에게 물어보고, 받은 "
@@ -1886,6 +1909,32 @@ with tab_query:
         st.success(f"지식베이스에 확정 저장되었습니다: {st.session_state['_kb_last_saved_path']}")
         st.session_state["_kb_last_saved_path"] = None
 
+    # ----------------------------------------------------------------------
+    # 지식베이스 확정 저장 작업 공간 (질의 탭 맨 위)
+    # ----------------------------------------------------------------------
+    # 어디서든(검색 기록 팝업, 종합 문서 팝업, 현재 대화 카드 등) "지식베이스에
+    # 확정 저장" 버튼을 누르면 여기에 작업 대상이 지정되고, 검증/수정/저장 흐름이
+    # 펼쳐진다.
+    #
+    # 위치 설계(피드백 반영): 예전에는 이 작업 공간이 질의 탭 '맨 아래'에 있었다.
+    # 그래서 검색 기록/종합 문서 팝업에서 확정 저장을 누르면 팝업만 닫히고, 정작
+    # 작업 공간은 질의 탭 맨 아래에 생겨서 — 사용자가 탭을 옮기고 한참 스크롤을
+    # 내려야 겨우 찾을 수 있었다. 확정 작업은 누른 즉시 이어서 해야 하는 일이므로
+    # 질의 탭 맨 위로 올려, 탭만 옮기면 바로 눈에 들어오게 한다.
+    #
+    # is_admin으로 한 번 더 감싸는 이유: 버튼 자체는 직원에게 안 보이게 막았지만,
+    # 혹시라도 세션에 kb_confirm_target이 남은 상태로 직원 계정 로그인하는 경우까지
+    # 대비해 작업 공간 자체도 이중으로 막는다.
+    if is_admin:
+        # 검색 기록/종합 문서 팝업 등에서 방금 확정 대상을 지정했다면, 지금
+        # 어디서 이어가면 되는지 한 번만 안내한다(탭을 옮겨온 직후의 길잃음 방지).
+        if st.session_state.pop("_kb_goto_workspace_hint", False):
+            st.info(
+                "확정 작업 대상으로 지정했습니다. 아래 '지식베이스 확정 저장 작업 공간'에서 "
+                "교차검증과 확정을 진행하세요."
+            )
+        render_confirm_to_kb_workspace()
+
 
     # ----------------------------------------------------------------------
     # 새 주제 시작 / 현재 묶음 표시줄
@@ -2200,16 +2249,13 @@ with tab_query:
     # ----------------------------------------------------------------------
     # 지식베이스 확정 저장 작업 공간 (화면 맨 아래, 화면 전체 너비)
     # ----------------------------------------------------------------------
-    # 어디서든(검색 기록, 현재 대화 카드 등) "지식베이스에 확정 저장" 버튼을 누르면
-    # 여기에 작업 대상이 지정되고, 이 섹션에 검증/수정/저장 흐름이 펼쳐짐.
-    # is_admin으로 한 번 더 감싸는 이유: 위에서 버튼 자체를 직원에게는 안 보이게
-    # 했지만(렌더링되는 곳들에서 if is_admin으로 막음), 혹시라도 세션에
-    # kb_confirm_target이 남아있는 상태로 직원 계정으로 로그인하는 경우까지
-    # 대비해 이 작업 공간 자체도 관리자가 아니면 절대 그려지지 않도록 이중으로 막음.
-    if is_admin:
-        render_confirm_to_kb_workspace()
 
 with tab_logs:
+    # 팝업에서 확정 저장을 눌러 작업 대상이 지정된 경우, 작업 공간은 '질의' 탭
+    # 맨 위에 열린다. 사용자는 여전히 이 탭에 머물러 있으므로 어디로 가야 하는지
+    # 명확히 알려준다.
+    if is_admin and st.session_state.get("kb_confirm_target"):
+        st.info("확정 작업 대상이 지정되어 있습니다. 위 '질의' 탭 맨 위에서 교차검증과 확정을 진행하세요.")
     _c_head, _c_kb = st.columns([3, 1])
     with _c_head:
         st.subheader("검색 기록")
@@ -2289,6 +2335,8 @@ with tab_logs:
 
 
 with tab_docs:
+    if is_admin and st.session_state.get("kb_confirm_target"):
+        st.info("확정 작업 대상이 지정되어 있습니다. 위 '질의' 탭 맨 위에서 교차검증과 확정을 진행하세요.")
     st.subheader("종합 문서 기록")
     st.caption(
         "여러 질문을 묶어 재구성한 종합 문서 기록입니다. "

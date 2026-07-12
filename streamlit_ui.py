@@ -594,7 +594,7 @@ user_type = "회계사" if is_admin else "직원"
 
 if st.session_state.get("_logged_in_via_master_reset"):
     st.error(
-        "⚠️ 비상 복구용 기본 비밀번호로 로그인했습니다. 보안을 위해 지금 바로 "
+        "비상 복구용 기본 비밀번호로 로그인했습니다. 보안을 위해 지금 바로 "
         "사이드바의 '로그인 비밀번호 관리'에서 관리자/직원 비밀번호를 새로 설정해주세요."
     )
 
@@ -710,7 +710,7 @@ def render_copy_button(text: str, key: str, label: str = "복사"):
         var originalHTML = btn.innerHTML;
 
         function onSuccess() {{
-          btn.innerHTML = '✅';
+          btn.innerHTML = '복사됨';
           setTimeout(function() {{ btn.innerHTML = originalHTML; }}, 1200);
         }}
         function onFail() {{
@@ -1114,7 +1114,7 @@ def render_confirm_to_kb_workspace():
                 getattr(st, _lvl, st.info)(_txt)
                 _fc = st.session_state.get(f"{key_prefix}_auto_final_critique", "")
                 if _fc:
-                    # 성공(✅)이 아니면(경고·실패) Claude의 남은 지적을 놓치지 않도록
+                    # 성공이 아니면(경고·실패) Claude의 남은 지적을 놓치지 않도록
                     # 최종 의견을 자동으로 펼쳐서 보여준다.
                     _expand_critique = (_lvl != "success")
                     with st.expander("Claude의 마지막 검토 의견 전체 보기", expanded=_expand_critique):
@@ -1272,7 +1272,7 @@ def render_confirm_to_kb_workspace():
         # 탭 2 — (기존) 수동 교차검증: 다른 AI에 복사해서 물어보고 답을 붙여넣음
         # ══════════════════════════════════════════════════════════════
         with tab_manual:
-            st.markdown(f"#### 🔸 {current_round}차에 보낼 질문 (다음 라운드 준비)")
+            st.markdown(f"#### {current_round}차에 보낼 질문 (다음 라운드 준비)")
             st.caption(
                 "아래 질문을 복사해서 다른 AI(ChatGPT, claude.ai 등)에게 물어보고, 받은 "
                 "답변을 아래 칸에 붙여넣으면 그 의견을 반영해 문서를 다시 작성합니다(2차부터는 "
@@ -1431,7 +1431,7 @@ def render_confirm_to_kb_workspace():
                         timestamp=source_log_timestamp,
                         question=question,
                     )
-                # 이번에 확정한 항목의 배지를 즉시 "✅ 확정됨"으로 바꾸기 위한
+                # 이번에 확정한 항목의 배지를 즉시 "확정됨"으로 바꾸기 위한
                 # 세션 플래그. 화면에 종합문서를 표시하는 곳에서 참고함.
                 st.session_state[f"{key_prefix}_kb_confirmed"] = True
 
@@ -1495,7 +1495,7 @@ def show_log_dialog():
     st.write(question)
     dialog_key_base = f"dialog_{row.get('일시', '')}".replace(" ", "_").replace(":", "")
     if row.get("확정여부") == "확정됨" or st.session_state.get(f"{dialog_key_base}_kb_confirmed"):
-        st.success("✅ 지식베이스에 확정된 질문/답변입니다.")
+        st.success("지식베이스에 확정된 질문/답변입니다.")
     st.divider()
     render_copyable_text(answer, key=f"{dialog_key_base}_answer")
     st.divider()
@@ -1597,9 +1597,9 @@ def show_summary_log_dialog():
     # 구글시트 '확정여부' 컬럼을 그대로 신뢰함 — 세션 상태가 아니라 시트 값을
     # 기준으로 판단하므로, 다른 브라우저/다른 사람이 확정한 경우에도 정확함.
     if row.get("확정여부") == "확정됨" or st.session_state.get(f"{dialog_key_base}_kb_confirmed"):
-        st.success("✅ 지식베이스에 확정된 문서입니다.")
+        st.success("지식베이스에 확정된 문서입니다.")
     else:
-        st.warning("⚠️ 아직 지식베이스에 확정되지 않은 AI 생성 문서입니다. 검증 절차를 거치지 않아 오류가 있을 수 있습니다.")
+        st.warning("아직 지식베이스에 확정되지 않은 AI 생성 문서입니다. 검증 절차를 거치지 않아 오류가 있을 수 있습니다.")
     render_copyable_text(summary_text, key=f"{dialog_key_base}_summary")
     st.divider()
 
@@ -2002,7 +2002,7 @@ with tab_query:
                 st.markdown(f"<div class='qa-meta'>{qa['time']}</div>", unsafe_allow_html=True)
                 st.markdown(f"<div class='qa-question'>Q. {qa['question']}</div>", unsafe_allow_html=True)
                 if st.session_state.get(f"cur_{qa_key}_kb_confirmed"):
-                    st.caption("✅ 지식베이스에 확정된 질문/답변입니다.")
+                    st.caption("지식베이스에 확정된 질문/답변입니다.")
                 render_copyable_text(qa["answer"], key=f"copy_cur_{qa_key}")
 
                 col1, col2, col3 = st.columns([1, 1, 1.4])
@@ -2066,9 +2066,9 @@ with tab_query:
         if st.session_state.summary_doc:
             st.markdown("### 종합 문서 결과")
             if st.session_state.get("summary_cur_kb_confirmed"):
-                st.success("✅ 지식베이스에 확정된 문서입니다.")
+                st.success("지식베이스에 확정된 문서입니다.")
             else:
-                st.warning("⚠️ 아직 지식베이스에 확정되지 않은 AI 생성 문서입니다. 검증 절차를 거치지 않아 오류가 있을 수 있습니다.")
+                st.warning("아직 지식베이스에 확정되지 않은 AI 생성 문서입니다. 검증 절차를 거치지 않아 오류가 있을 수 있습니다.")
             render_copyable_text(st.session_state.summary_doc, key="copy_summary_cur")
             save_col, kb_col = st.columns([1, 1.4])
             with save_col:
@@ -2143,9 +2143,9 @@ with tab_query:
 
                         if st.session_state.get(backlog_summary_key):
                             if st.session_state.get(f"{backlog_summary_key}_kb_confirmed"):
-                                st.success("✅ 지식베이스에 확정된 문서입니다.")
+                                st.success("지식베이스에 확정된 문서입니다.")
                             else:
-                                st.warning("⚠️ 아직 지식베이스에 확정되지 않은 AI 생성 문서입니다. 검증 절차를 거치지 않아 오류가 있을 수 있습니다.")
+                                st.warning("아직 지식베이스에 확정되지 않은 AI 생성 문서입니다. 검증 절차를 거치지 않아 오류가 있을 수 있습니다.")
                             render_copyable_text(st.session_state[backlog_summary_key], key=f"{backlog_summary_key}_copy_text")
                             save_show_key = f"{backlog_summary_key}_save_show"
                             if st.button("이 종합 문서 저장", key=f"{backlog_summary_key}_save_btn"):
@@ -2217,9 +2217,13 @@ with tab_query:
 
 with tab_logs:
     st.subheader("검색 기록")
-    st.caption("개별 질문 하나하나에 대한 답변 기록입니다.")
+    st.caption("개별 질문 하나하나에 대한 답변 기록입니다. 확정된 항목은 [확정] 표시가 붙습니다.")
+
+    if st.button("지식베이스 조회", key="open_kb_dialog_btn"):
+        show_knowledge_base_dialog()
+    st.divider()
+
     if engine.sheet_logger and engine.sheet_logger.enabled:
-        st.success("구글 시트 로깅 사용 중")
         n_logs = st.slider("불러올 최근 기록 수", min_value=10, max_value=200, value=30, step=10)
         search_term = st.text_input("질문 내용 검색 (비워두면 전체 표시)", key="log_search_term")
 
@@ -2239,11 +2243,22 @@ with tab_logs:
             st.caption(f"{len(filtered)}건 표시 (전체 불러온 기록 {len(loaded)}건 중)")
 
             for idx, row in enumerate(filtered):
-                badge = "✅ " if row.get("확정여부") == "확정됨" else ""
-                label = f"{badge}{row.get('일시', '')} | {row.get('사용자구분', '')} | {row.get('질문', '')[:30]}"
-                if st.button(label, key=f"log_open_{idx}", use_container_width=True):
-                    st.session_state["_dialog_log_row"] = row
-                    show_log_dialog()
+                # 목록 한 줄: [확정] 배지 · 일시 · 사용자 · 질문 앞부분 (좌측 정렬)
+                # 버튼 라벨은 가운데 정렬로 고정되어 읽기 불편하므로, 좌측에 텍스트를
+                # 두고 오른쪽 작은 '열기' 버튼으로 상세를 띄운다.
+                badge = "[확정] " if row.get("확정여부") == "확정됨" else ""
+                _c_txt, _c_btn = st.columns([9, 1])
+                with _c_txt:
+                    st.markdown(
+                        f"<div style='text-align:left; padding:6px 0;'>"
+                        f"{badge}{row.get('일시', '')} · {row.get('사용자구분', '')} · "
+                        f"{row.get('질문', '')[:40]}</div>",
+                        unsafe_allow_html=True,
+                    )
+                with _c_btn:
+                    if st.button("열기", key=f"log_open_{idx}"):
+                        st.session_state["_dialog_log_row"] = row
+                        show_log_dialog()
         else:
             st.write("위 '기록 불러오기' 버튼을 눌러 구글 시트에서 기록을 가져오세요.")
     else:
@@ -2263,10 +2278,6 @@ with tab_logs:
                 "설정하면 모든 질의응답이 구글 스프레드시트에 자동 기록됩니다."
             )
 
-    st.divider()
-    if st.button("지식베이스 조회", key="open_kb_dialog_btn", use_container_width=True):
-        show_knowledge_base_dialog()
-
 
 with tab_docs:
     st.subheader("종합 문서 기록")
@@ -2274,7 +2285,7 @@ with tab_docs:
         "여러 질문을 묶어 재구성한 종합 문서 기록입니다. "
         "'종합 문서 생성' 시점에 자동으로 여기에 남습니다 "
         "(개별 질문 기록과는 별도 탭에 저장되어 섞이지 않습니다). "
-        "✅ 확정됨 표시가 없으면 검증 절차를 거치지 않은 AI 생성 문서이니 참고하세요."
+        "[확정] 표시가 없으면 검증 절차를 거치지 않은 AI 생성 문서이니 참고하세요."
     )
     if engine.sheet_logger and engine.sheet_logger.enabled:
         n_summaries = st.slider(
@@ -2290,14 +2301,19 @@ with tab_docs:
         if loaded_summaries:
             st.caption(f"{len(loaded_summaries)}건 표시")
             for idx, row in enumerate(loaded_summaries):
-                badge = "✅ " if row.get("확정여부") == "확정됨" else "⚠️ "
-                label = (
-                    f"{badge}{row.get('일시', '')} | 질의 {row.get('포함된질의건수', '?')}건 | "
-                    f"{row.get('종합문서요약', '')[:30]}"
-                )
-                if st.button(label, key=f"summary_open_{idx}", use_container_width=True):
-                    st.session_state["_dialog_summary_row"] = row
-                    show_summary_log_dialog()
+                badge = "[확정] " if row.get("확정여부") == "확정됨" else "[미확정] "
+                _c_txt, _c_btn = st.columns([9, 1])
+                with _c_txt:
+                    st.markdown(
+                        f"<div style='text-align:left; padding:6px 0;'>"
+                        f"{badge}{row.get('일시', '')} · 질의 {row.get('포함된질의건수', '?')}건 · "
+                        f"{row.get('종합문서요약', '')[:40]}</div>",
+                        unsafe_allow_html=True,
+                    )
+                with _c_btn:
+                    if st.button("열기", key=f"summary_open_{idx}"):
+                        st.session_state["_dialog_summary_row"] = row
+                        show_summary_log_dialog()
         else:
             st.write("위 '종합 문서 기록 불러오기' 버튼을 눌러 구글 시트에서 가져오세요.")
     else:

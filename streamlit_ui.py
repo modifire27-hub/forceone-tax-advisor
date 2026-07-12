@@ -109,12 +109,7 @@ st.markdown(
     }
     .pf-header-caption {
         color: var(--pf-text-muted) !important; font-size: 0.95rem !important;
-        margin: 0.2rem 0 0 0 !important;
-    }
-    .pf-header-accent {
-        width: 44px !important; height: 3px !important;
-        background-color: var(--pf-gold) !important;
-        border-radius: 0 !important; margin: 0.55rem 0 0.1rem !important;
+        margin: 0.2rem 0 1.4rem 0 !important;
     }
 
     /* 질의/답변 카드 ----------------------------------------------------- */
@@ -366,8 +361,7 @@ st.markdown(
 
 st.markdown(
     '<div class="pf-header-row"><p class="pf-header-title">포스원 세무 자문 AI 시스템</p></div>'
-    '<p class="pf-header-caption">기장 직원 / 회계사를 위한 세무질의 실시간 응답 도구</p>'
-    '<div class="pf-header-accent"></div>',
+    '<p class="pf-header-caption">기장 직원 / 회계사를 위한 세무질의 실시간 응답 도구</p>',
     unsafe_allow_html=True,
 )
 

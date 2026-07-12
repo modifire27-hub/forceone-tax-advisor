@@ -2216,12 +2216,13 @@ with tab_query:
         render_confirm_to_kb_workspace()
 
 with tab_logs:
-    st.subheader("검색 기록")
-    st.caption("개별 질문 하나하나에 대한 답변 기록입니다. 확정된 항목은 [확정] 표시가 붙습니다.")
-
-    if st.button("지식베이스 조회", key="open_kb_dialog_btn"):
-        show_knowledge_base_dialog()
-    st.divider()
+    _c_head, _c_kb = st.columns([3, 1])
+    with _c_head:
+        st.subheader("검색 기록")
+    with _c_kb:
+        if st.button("지식베이스 조회", key="open_kb_dialog_btn", type="primary", use_container_width=True):
+            show_knowledge_base_dialog()
+    st.caption("개별 질문 하나하나에 대한 답변 기록입니다.")
 
     if engine.sheet_logger and engine.sheet_logger.enabled:
         n_logs = st.slider("불러올 최근 기록 수", min_value=10, max_value=200, value=30, step=10)
@@ -2243,22 +2244,36 @@ with tab_logs:
             st.caption(f"{len(filtered)}건 표시 (전체 불러온 기록 {len(loaded)}건 중)")
 
             for idx, row in enumerate(filtered):
-                # 목록 한 줄: [확정] 배지 · 일시 · 사용자 · 질문 앞부분 (좌측 정렬)
-                # 버튼 라벨은 가운데 정렬로 고정되어 읽기 불편하므로, 좌측에 텍스트를
-                # 두고 오른쪽 작은 '열기' 버튼으로 상세를 띄운다.
-                badge = "[확정] " if row.get("확정여부") == "확정됨" else ""
+                # 목록 한 줄 — 시각적 위계:
+                #   확정 배지(초록 알약) · 메타(흐린 작은 글씨) · 질문(진한 본문)
+                # 이모지 대신 색·크기·농도로 정보 위계를 만든다.
+                _confirmed = row.get("확정여부") == "확정됨"
+                _badge = (
+                    "<span style='background:#E1F5EE;color:#0F6E56;font-size:11px;"
+                    "padding:2px 8px;border-radius:10px;margin-right:8px;"
+                    "white-space:nowrap;'>확정</span>"
+                    if _confirmed else ""
+                )
                 _c_txt, _c_btn = st.columns([9, 1])
                 with _c_txt:
                     st.markdown(
-                        f"<div style='text-align:left; padding:6px 0;'>"
-                        f"{badge}{row.get('일시', '')} · {row.get('사용자구분', '')} · "
-                        f"{row.get('질문', '')[:40]}</div>",
+                        f"<div style='text-align:left; padding:8px 0 2px;'>"
+                        f"{_badge}"
+                        f"<span style='color:#888780;font-size:12px;'>"
+                        f"{row.get('일시', '')} · {row.get('사용자구분', '')}</span><br>"
+                        f"<span style='font-size:14px;'>"
+                        f"{row.get('질문', '')[:60]}</span>"
+                        f"</div>",
                         unsafe_allow_html=True,
                     )
                 with _c_btn:
                     if st.button("열기", key=f"log_open_{idx}"):
                         st.session_state["_dialog_log_row"] = row
                         show_log_dialog()
+                st.markdown(
+                    "<hr style='margin:4px 0; border:none; border-top:1px solid #EEE;'>",
+                    unsafe_allow_html=True,
+                )
         else:
             st.write("위 '기록 불러오기' 버튼을 눌러 구글 시트에서 기록을 가져오세요.")
     else:
@@ -2285,7 +2300,7 @@ with tab_docs:
         "여러 질문을 묶어 재구성한 종합 문서 기록입니다. "
         "'종합 문서 생성' 시점에 자동으로 여기에 남습니다 "
         "(개별 질문 기록과는 별도 탭에 저장되어 섞이지 않습니다). "
-        "[확정] 표시가 없으면 검증 절차를 거치지 않은 AI 생성 문서이니 참고하세요."
+        "'미확정' 배지가 붙은 문서는 검증 절차를 거치지 않은 AI 생성 문서이니 참고하세요."
     )
     if engine.sheet_logger and engine.sheet_logger.enabled:
         n_summaries = st.slider(
@@ -2301,19 +2316,39 @@ with tab_docs:
         if loaded_summaries:
             st.caption(f"{len(loaded_summaries)}건 표시")
             for idx, row in enumerate(loaded_summaries):
-                badge = "[확정] " if row.get("확정여부") == "확정됨" else "[미확정] "
+                _confirmed = row.get("확정여부") == "확정됨"
+                if _confirmed:
+                    _badge = (
+                        "<span style='background:#E1F5EE;color:#0F6E56;font-size:11px;"
+                        "padding:2px 8px;border-radius:10px;margin-right:8px;"
+                        "white-space:nowrap;'>확정</span>"
+                    )
+                else:
+                    _badge = (
+                        "<span style='background:#FAEEDA;color:#854F0B;font-size:11px;"
+                        "padding:2px 8px;border-radius:10px;margin-right:8px;"
+                        "white-space:nowrap;'>미확정</span>"
+                    )
                 _c_txt, _c_btn = st.columns([9, 1])
                 with _c_txt:
                     st.markdown(
-                        f"<div style='text-align:left; padding:6px 0;'>"
-                        f"{badge}{row.get('일시', '')} · 질의 {row.get('포함된질의건수', '?')}건 · "
-                        f"{row.get('종합문서요약', '')[:40]}</div>",
+                        f"<div style='text-align:left; padding:8px 0 2px;'>"
+                        f"{_badge}"
+                        f"<span style='color:#888780;font-size:12px;'>"
+                        f"{row.get('일시', '')} · 질의 {row.get('포함된질의건수', '?')}건</span><br>"
+                        f"<span style='font-size:14px;'>"
+                        f"{row.get('종합문서요약', '')[:60]}</span>"
+                        f"</div>",
                         unsafe_allow_html=True,
                     )
                 with _c_btn:
                     if st.button("열기", key=f"summary_open_{idx}"):
                         st.session_state["_dialog_summary_row"] = row
                         show_summary_log_dialog()
+                st.markdown(
+                    "<hr style='margin:4px 0; border:none; border-top:1px solid #EEE;'>",
+                    unsafe_allow_html=True,
+                )
         else:
             st.write("위 '종합 문서 기록 불러오기' 버튼을 눌러 구글 시트에서 가져오세요.")
     else:

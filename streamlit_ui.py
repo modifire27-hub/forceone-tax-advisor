@@ -2641,82 +2641,88 @@ with tab_admin:
         custom_filename = st.text_input("파일명 (확장자 제외)", key="custom_filename")
 
     st.divider()
-    st.subheader("전체 초기화")
-    if st.button("모든 기록 삭제 (백로그 포함)"):
+    st.subheader("화면 정리")
+    st.caption(
+        "화면에 쌓인 대화(진행 중인 대화와 아래 백로그)를 모두 비웁니다. "
+        "구글 시트에 저장된 검색 기록·종합 문서·지식베이스는 그대로 남아 있으며, "
+        "각 탭에서 다시 불러올 수 있습니다."
+    )
+    if st.button("화면의 대화 모두 지우기"):
         st.session_state.current_thread = []
         st.session_state.backlog = []
         st.session_state.summary_doc = None
         st.rerun()
 
-    st.divider()
-    with st.expander("진단 정보 (문제 발생 시 확인용)", expanded=False):
-        # 구글 시트 관련 환경변수 진단
-        # 주의: 실제 키 값은 절대 화면에 표시하지 않음. 존재 여부와 길이만 표시해서
-        # "os.getenv()가 값을 제대로 읽고 있는지"만 확인할 수 있게 함.
-        _gsheet_id = os.getenv("GOOGLE_SHEET_ID", "")
-        _gcred_json = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
-        _gcred_path = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
-        _err = engine.sheet_logger.error_message if engine.sheet_logger else "(sheet_logger 없음)"
-        if _err == "__NOT_CONFIGURED__":
-            _err = "(설정 자체가 없음 — 정상. 환경변수가 비어있어서 시도조차 안 함)"
-        elif _err == "":
-            _err = "(빈 문자열 — try 블록 진입 후 self.enabled=True 직전에 멈췄을 가능성)"
-        _tab_errors = getattr(engine.sheet_logger, "tab_errors", {}) if engine.sheet_logger else {}
-        st.code(
-            f"[구글 시트 관련]\n"
-            f"GOOGLE_SHEET_ID 읽힘: {'예 (' + str(len(_gsheet_id)) + '자)' if _gsheet_id else '아니오 (빈 값)'}\n"
-            f"GOOGLE_CREDENTIALS_JSON 읽힘: {'예 (' + str(len(_gcred_json)) + '자)' if _gcred_json else '아니오 (빈 값)'}\n"
-            f"GOOGLE_CREDENTIALS_PATH 읽힘: {'예 (' + str(len(_gcred_path)) + '자)' if _gcred_path else '아니오 (빈 값)'}\n"
-            f"sheet_logger.enabled: {engine.sheet_logger.enabled if engine.sheet_logger else '(sheet_logger 없음)'}\n"
-            f"sheet_logger.error_message: {_err}\n"
-            f"tab_errors (탭별 개별 오류, 있으면 그 탭 기능만 비활성): "
-            f"{_tab_errors if _tab_errors else '(없음 — 모든 탭 정상)'}\n"
-            f"\n[법제처 관련]\n"
-            f"ENABLE_NTS_SEARCH 원본값: {os.getenv('ENABLE_NTS_SEARCH', '(없음)')!r}\n"
-            f"LAW_API_OC 설정 여부: {'설정됨' if os.getenv('LAW_API_OC', '').strip() else '미설정'}\n"
-            f"law_client 객체: {engine.law_client}\n"
-            f"law_client 모듈 파일 경로: {getattr(__import__('law_api'), '__file__', '확인불가')}",
-            language="text",
-        )
-        if st.button("국세청 검색 직접 테스트"):
-            test_q = "음식점업을 영위하는 사업자가 면세 재화를 매입한 경우 매입세액공제는?"
-            st.write(f"테스트 질문: {test_q}")
+    if is_admin:
+        st.divider()
+        with st.expander("진단 정보 (문제 발생 시 확인용)", expanded=False):
+            # 구글 시트 관련 환경변수 진단
+            # 주의: 실제 키 값은 절대 화면에 표시하지 않음. 존재 여부와 길이만 표시해서
+            # "os.getenv()가 값을 제대로 읽고 있는지"만 확인할 수 있게 함.
+            _gsheet_id = os.getenv("GOOGLE_SHEET_ID", "")
+            _gcred_json = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
+            _gcred_path = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
+            _err = engine.sheet_logger.error_message if engine.sheet_logger else "(sheet_logger 없음)"
+            if _err == "__NOT_CONFIGURED__":
+                _err = "(설정 자체가 없음 — 정상. 환경변수가 비어있어서 시도조차 안 함)"
+            elif _err == "":
+                _err = "(빈 문자열 — try 블록 진입 후 self.enabled=True 직전에 멈췄을 가능성)"
+            _tab_errors = getattr(engine.sheet_logger, "tab_errors", {}) if engine.sheet_logger else {}
+            st.code(
+                f"[구글 시트 관련]\n"
+                f"GOOGLE_SHEET_ID 읽힘: {'예 (' + str(len(_gsheet_id)) + '자)' if _gsheet_id else '아니오 (빈 값)'}\n"
+                f"GOOGLE_CREDENTIALS_JSON 읽힘: {'예 (' + str(len(_gcred_json)) + '자)' if _gcred_json else '아니오 (빈 값)'}\n"
+                f"GOOGLE_CREDENTIALS_PATH 읽힘: {'예 (' + str(len(_gcred_path)) + '자)' if _gcred_path else '아니오 (빈 값)'}\n"
+                f"sheet_logger.enabled: {engine.sheet_logger.enabled if engine.sheet_logger else '(sheet_logger 없음)'}\n"
+                f"sheet_logger.error_message: {_err}\n"
+                f"tab_errors (탭별 개별 오류, 있으면 그 탭 기능만 비활성): "
+                f"{_tab_errors if _tab_errors else '(없음 — 모든 탭 정상)'}\n"
+                f"\n[법제처 관련]\n"
+                f"ENABLE_NTS_SEARCH 원본값: {os.getenv('ENABLE_NTS_SEARCH', '(없음)')!r}\n"
+                f"LAW_API_OC 설정 여부: {'설정됨' if os.getenv('LAW_API_OC', '').strip() else '미설정'}\n"
+                f"law_client 객체: {engine.law_client}\n"
+                f"law_client 모듈 파일 경로: {getattr(__import__('law_api'), '__file__', '확인불가')}",
+                language="text",
+            )
+            if st.button("국세청 검색 직접 테스트"):
+                test_q = "음식점업을 영위하는 사업자가 면세 재화를 매입한 경우 매입세액공제는?"
+                st.write(f"테스트 질문: {test_q}")
 
-            # 1단계: 키워드 추출 결과를 그대로 노출 (repr로 공백/특수문자까지 확인 가능)
-            extracted = engine._extract_search_keywords(test_q, max_keywords=3)
-            st.write("추출된 키워드 (raw repr):")
-            st.code(repr(extracted), language="python")
+                # 1단계: 키워드 추출 결과를 그대로 노출 (repr로 공백/특수문자까지 확인 가능)
+                extracted = engine._extract_search_keywords(test_q, max_keywords=3)
+                st.write("추출된 키워드 (raw repr):")
+                st.code(repr(extracted), language="python")
 
-            # 2단계: 키워드 각각으로 직접 법제처 검색 호출 (engine을 거치지 않고 law_client 직접 사용)
-            if extracted:
-                import urllib.parse as _urlparse
-                for kw in extracted:
-                    try:
-                        # 원시 URL과 원시 응답까지 직접 확인 (어디서 0건이 되는지 추적)
-                        raw_url = "https://www.law.go.kr/DRF/lawSearch.do?" + _urlparse.urlencode({
-                            "OC": engine.law_client.oc_key,
-                            "target": "ntsCgmExpc",
-                            "type": "XML",
-                            "query": kw,
-                            "display": 3,
-                            "search": 2,
-                        })
-                        st.code(raw_url, language="text")
-                        raw_response = engine.law_client._fetch(raw_url)
-                        st.text_area(f"'{kw}' 원시 응답 (앞 1000자)", raw_response[:1000], height=150, key=f"raw_{kw}")
+                # 2단계: 키워드 각각으로 직접 법제처 검색 호출 (engine을 거치지 않고 law_client 직접 사용)
+                if extracted:
+                    import urllib.parse as _urlparse
+                    for kw in extracted:
+                        try:
+                            # 원시 URL과 원시 응답까지 직접 확인 (어디서 0건이 되는지 추적)
+                            raw_url = "https://www.law.go.kr/DRF/lawSearch.do?" + _urlparse.urlencode({
+                                "OC": engine.law_client.oc_key,
+                                "target": "ntsCgmExpc",
+                                "type": "XML",
+                                "query": kw,
+                                "display": 3,
+                                "search": 2,
+                            })
+                            st.code(raw_url, language="text")
+                            raw_response = engine.law_client._fetch(raw_url)
+                            st.text_area(f"'{kw}' 원시 응답 (앞 1000자)", raw_response[:1000], height=150, key=f"raw_{kw}")
 
-                        kw_result = engine.law_client.search_nts_interpretations(kw, display=3)
-                        st.write(f"  - 키워드 {repr(kw)} → {len(kw_result)}건")
-                        if kw_result:
-                            st.code(str(kw_result[0]), language="python")
-                    except Exception as e:
-                        st.error(f"키워드 {repr(kw)} → 예외 발생: {type(e).__name__}: {e}")
-            else:
-                st.warning("키워드 추출 결과가 비어 있습니다 (Gemini 호출 자체가 실패했을 가능성)")
+                            kw_result = engine.law_client.search_nts_interpretations(kw, display=3)
+                            st.write(f"  - 키워드 {repr(kw)} → {len(kw_result)}건")
+                            if kw_result:
+                                st.code(str(kw_result[0]), language="python")
+                        except Exception as e:
+                            st.error(f"키워드 {repr(kw)} → 예외 발생: {type(e).__name__}: {e}")
+                else:
+                    st.warning("키워드 추출 결과가 비어 있습니다 (Gemini 호출 자체가 실패했을 가능성)")
 
-            # 3단계: 전체 파이프라인 결과
-            test_result = engine.search_nts_interpretations(test_q)
-            st.write("전체 파이프라인 결과 길이:", len(test_result))
-            if test_result:
-                st.text(test_result[:500])
+                # 3단계: 전체 파이프라인 결과
+                test_result = engine.search_nts_interpretations(test_q)
+                st.write("전체 파이프라인 결과 길이:", len(test_result))
+                if test_result:
+                    st.text(test_result[:500])
 

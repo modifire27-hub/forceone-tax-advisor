@@ -637,6 +637,9 @@ st.session_state.setdefault("custom_filename", "")
 # "확정 저장 실행" 성공 직후 st.rerun()으로 화면을 정리할 때, 성공 메시지가
 # rerun과 함께 사라지지 않도록 잠깐 담아두는 값 (아래에서 한 번 보여주고 비움)
 st.session_state.setdefault("_kb_last_saved_path", None)
+# 종합문서 확정 시, '종합문서' 탭 원본 행 갱신(update_summary)의 결과 상태.
+# 리런 직후 배너에서 한 번 보여주고 비운다. (v1.11 — 조용한 실패 방지)
+st.session_state.setdefault("_kb_last_summary_status", None)
 
 
 def render_copy_button(text: str, key: str, label: str = "복사"):
@@ -829,6 +832,7 @@ def render_confirm_to_kb_button(
     source_summary_timestamp: str = None,
     source_log_timestamp: str = None,
     already_confirmed: bool = False,
+    is_summary_doc: bool = False,
 ):
     """
     '지식베이스에 확정 저장' 버튼만 그림. 누르면 실제 작업 화면은 이 버튼이 있는
@@ -893,6 +897,14 @@ def render_confirm_to_kb_button(
             "crosscheck_session_id": str(uuid.uuid4()),
             "source_summary_timestamp": source_summary_timestamp,
             "source_log_timestamp": source_log_timestamp,
+            # v1.11 추가 — "이 확정 대상이 종합문서인가"를 타임스탬프 유무가
+            # 아니라 명시적 플래그로 판정한다. 기존에는 source_summary_timestamp가
+            # 있을 때만 종합문서로 간주해 원본 행을 덮어썼는데, 타임스탬프가
+            # None이면(구글시트 로깅 실패, 세션 끊김 등) 갱신 시도 자체를 조용히
+            # 건너뛰어 "지식베이스만 최신, 종합문서 탭은 원본 그대로"가 됐음.
+            # 이 플래그가 True면 타임스탬프가 없어도 내용 기반 폴백 매칭으로
+            # 원본 행을 찾아 갱신한다(sheet_logger.update_summary 참고).
+            "is_summary_doc": is_summary_doc,
         }
         # 이전에 다른 항목을 검증/수정하던 상태가 남아있으면 깨끗하게 초기화.
         # edited_content 키 자체를 세션 상태에서 제거함(아직 확정 전이므로
@@ -982,6 +994,9 @@ def render_confirm_to_kb_workspace():
     # (개별 질문/답변 확정 시에는 None — render_confirm_to_kb_button 참고)
     source_summary_timestamp = target.get("source_summary_timestamp")
     source_log_timestamp = target.get("source_log_timestamp")
+    # 과거 버전에서 만들어진 target에는 is_summary_doc 키가 없을 수 있으므로,
+    # 없으면 예전 판정 방식(타임스탬프 유무)으로 폴백한다.
+    is_summary_doc = target.get("is_summary_doc", bool(source_summary_timestamp))
     st.session_state["kb_confirm_target"] = target
 
     st.divider()
@@ -1436,11 +1451,21 @@ def render_confirm_to_kb_workspace():
                 # 별개로 원본 '종합문서' 탭 행 자체도 확정된 최종본으로
                 # 덮어씀 — 검증 전 원본과 확정본이 따로 남아 헷갈리지 않도록
                 # 함(2026-07-09, 사용자 확인 후 결정된 방침).
-                if source_summary_timestamp and engine.sheet_logger and engine.sheet_logger.enabled:
-                    engine.sheet_logger.update_summary(
-                        timestamp=source_summary_timestamp,
-                        new_summary_text=st.session_state[edited_key],
-                    )
+                # v1.11 — 갱신 결과(상태 문자열)를 반드시 받아서 세션에 담고,
+                # 리런 직후 화면 상단 배너에서 성공/실패를 명시적으로 보여준다.
+                # (기존에는 반환값을 무시해서 실패가 화면에 전혀 드러나지 않았음)
+                if is_summary_doc:
+                    if engine.sheet_logger and engine.sheet_logger.enabled:
+                        _summary_update_status = engine.sheet_logger.update_summary(
+                            timestamp=source_summary_timestamp,
+                            new_summary_text=st.session_state[edited_key],
+                            original_text=answer,
+                        )
+                    else:
+                        _summary_update_status = "disabled"
+                    st.session_state["_kb_last_summary_status"] = _summary_update_status
+                else:
+                    st.session_state["_kb_last_summary_status"] = None
                 # 개별 질문/답변 확정인 경우: 내용은 그대로 두고 검색기록
                 # 탭의 '확정여부'만 표시(종합문서와 달리 원본을 덮어쓰지 않음).
                 if source_log_timestamp and engine.sheet_logger and engine.sheet_logger.enabled:
@@ -1645,6 +1670,7 @@ def show_summary_log_dialog():
                 key_prefix=dialog_key_base,
                 dialog_row_key="_dialog_summary_row",
                 source_summary_timestamp=row.get("일시", ""),
+                is_summary_doc=True,
                 already_confirmed=(
                     row.get("확정여부") == "확정됨"
                     or bool(st.session_state.get(f"{dialog_key_base}_kb_confirmed"))
@@ -1909,6 +1935,37 @@ with tab_query:
         st.success(f"지식베이스에 확정 저장되었습니다: {st.session_state['_kb_last_saved_path']}")
         st.session_state["_kb_last_saved_path"] = None
 
+        # v1.11 — 종합문서 확정이었다면, '종합문서' 탭 원본 행 갱신까지 실제로
+        # 성공했는지를 같은 자리에서 함께 알려준다. 지식베이스 저장은 성공했는데
+        # 시트 갱신만 실패하는 경우가 실제로 발생했고(지식베이스만 최신본,
+        # 종합문서 탭은 옛 원본), 예전 코드는 이를 전혀 표시하지 않아 문제를
+        # 알아차릴 방법이 없었다.
+        _sum_status = st.session_state.get("_kb_last_summary_status")
+        if _sum_status == "updated_by_timestamp":
+            st.success("'종합문서' 탭의 원본 행도 확정 최종본으로 갱신되었습니다.")
+        elif _sum_status == "updated_by_content":
+            st.success(
+                "'종합문서' 탭의 원본 행도 확정 최종본으로 갱신되었습니다. "
+                "(생성 시점 타임스탬프가 유실되어 원본 내용 일치로 행을 찾았습니다)"
+            )
+        elif _sum_status == "not_found":
+            st.error(
+                "지식베이스 저장은 완료됐지만, '종합문서' 탭에서 원본 행을 찾지 못해 "
+                "시트 내용은 갱신되지 않았습니다. 시트의 해당 행은 여전히 확정 전 "
+                "원본이므로, 종합문서 탭을 직접 확인해 주세요."
+            )
+        elif _sum_status == "disabled":
+            st.warning(
+                "지식베이스 저장은 완료됐지만, 구글시트 연동이 비활성 상태라 "
+                "'종합문서' 탭은 갱신되지 않았습니다."
+            )
+        elif isinstance(_sum_status, str) and _sum_status.startswith("error:"):
+            st.error(
+                "지식베이스 저장은 완료됐지만, '종합문서' 탭 갱신 중 오류가 "
+                f"발생했습니다 — {_sum_status}"
+            )
+        st.session_state["_kb_last_summary_status"] = None
+
     # ----------------------------------------------------------------------
     # 지식베이스 확정 저장 작업 공간 (질의 탭 맨 위)
     # ----------------------------------------------------------------------
@@ -1957,6 +2014,11 @@ with tab_query:
             })
             st.session_state.current_thread = []
             st.session_state.summary_doc = None
+            # v1.11 — 종합문서를 지우면서 그 문서의 시트 행 타임스탬프도 반드시
+            # 함께 지운다. 기존에는 summary_doc만 None으로 만들고 source_ts는
+            # 남겨둬서, 다음에 만든 종합문서가 엉뚱한(이전) 시트 행을 덮어쓸 수
+            # 있는 잠재 버그가 있었음.
+            st.session_state.summary_doc_source_ts = None
             st.rerun()
 
 
@@ -2004,6 +2066,9 @@ with tab_query:
                 "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
             st.session_state.summary_doc = None
+            # v1.11 — 위 '새 주제 시작'과 같은 이유로, 유령 타임스탬프가 남지
+            # 않도록 함께 초기화한다.
+            st.session_state.summary_doc_source_ts = None
 
             # 구글 시트 로깅 (설정된 경우에만 동작, 실패해도 화면 흐름에 영향 없음)
             if engine.sheet_logger and engine.sheet_logger.enabled:
@@ -2141,6 +2206,7 @@ with tab_query:
                         key_prefix="summary_cur",
                         source_summary_timestamp=st.session_state.get("summary_doc_source_ts"),
                         already_confirmed=bool(st.session_state.get("summary_cur_kb_confirmed")),
+                        is_summary_doc=True,
                     )
     else:
         st.info("새 질문을 입력하면 여기서 대화가 시작됩니다.")
@@ -2213,6 +2279,7 @@ with tab_query:
                                     key_prefix=backlog_summary_key,
                                     source_summary_timestamp=st.session_state.get(f"{backlog_summary_key}_source_ts"),
                                     already_confirmed=bool(st.session_state.get(f"{backlog_summary_key}_kb_confirmed")),
+                                    is_summary_doc=True,
                                 )
                     with col2:
                         if st.button("이 묶음 삭제", key=f"delete_backlog_{b_idx}"):

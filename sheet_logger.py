@@ -452,7 +452,12 @@ class SheetLogger:
             print(f"[경고] 종합문서 시트 조회 실패: {e}")
             return []
 
-    def update_summary(self, timestamp: str, new_summary_text: str) -> bool:
+    def update_summary(
+        self,
+        timestamp: str,
+        new_summary_text: str,
+        original_text: str = None,
+    ) -> str:
         """
         '종합문서' 탭의 행 1건을 지식베이스 확정 시점의 최종본 내용으로 덮어씀.
 
@@ -465,40 +470,94 @@ class SheetLogger:
         - 해결: 확정 완료 시 원본 행 자체를 최종본 내용으로 덮어써서 하나만
           남김(원본 이력은 보존하지 않음 — 사용자 확인 후 결정된 방침).
           '확정여부' 컬럼도 함께 "확정됨"으로 표시함.
-        - delete_summary와 동일하게 '일시' 하나로 행을 식별함.
+
+        v1.11 변경 (2026-07-13 — "확정했는데 종합문서 탭이 안 바뀌는" 버그 대응):
+        1) **반환값을 bool → 상태 문자열로 변경**. 기존에는 실패해도 조용히
+           False만 돌려주고 호출부가 그 값을 무시해서, 지식베이스에는 최신본이
+           저장됐는데 종합문서 탭은 원본 그대로인 상태가 화면상 "성공"으로만
+           보였음(가짜 성공). 이제 어느 단계에서 실패했는지를 문자열로 돌려주고,
+           호출부(streamlit_ui)가 그대로 화면에 노출함.
+        2) **내용 기반 폴백 매칭 추가**. 기본은 기존과 같이 '일시'로 행을
+           식별하지만, 타임스탬프가 없거나(세션 끊김 등으로 유실) 그 값으로
+           행을 못 찾으면 original_text(확정 작업 대상이 된 원본 종합문서 전문)와
+           '종합문서전체' 열이 완전히 일치하는 행을 찾아 갱신함.
+        3) **3회 update_cell → 단일 batch_update로 원자화**. 중간에 실패하면
+           일부 열만 갱신된 채 남던 문제를 제거(요약만 바뀌고 본문은 옛 내용인
+           반쪽 행이 생기지 않도록 함).
 
         Parameters
         ----------
         timestamp : str
-            덮어쓸 행의 '일시' 값 (log_summary가 반환한 값을 그대로 사용)
+            덮어쓸 행의 '일시' 값 (log_summary가 반환한 값). None/빈 값 가능 —
+            이 경우 곧바로 original_text 기반 폴백 매칭으로 넘어감.
         new_summary_text : str
             지식베이스 확정 시점의 최종(검증/수정 완료) 내용
+        original_text : str, optional
+            확정 작업을 시작할 때의 원본 종합문서 전문. 타임스탬프 매칭이
+            실패했을 때의 폴백 식별자로 사용됨.
 
         Returns
         -------
-        bool
-            갱신 성공 여부 (해당 행을 못 찾은 경우도 False)
+        str
+            "updated_by_timestamp" — 정상(일시로 행을 찾아 갱신)
+            "updated_by_content"   — 정상(폴백: 원본 내용 일치로 행을 찾아 갱신)
+            "disabled"             — 구글시트 연동 비활성(갱신 시도 자체를 못 함)
+            "not_found"            — 시트에서 해당 행을 끝내 찾지 못함
+            "error: ..."           — 구글시트 API 호출 중 예외 발생
         """
         if not self.enabled or self.summary_sheet is None:
-            return False
+            return "disabled"
 
         try:
             all_values = self.summary_sheet.get_all_values()
-            for row_idx, row in enumerate(all_values[1:], start=2):
-                if len(row) >= 1 and row[0] == timestamp:
-                    preview = new_summary_text[:100].replace("\n", " ") + (
-                        "..." if len(new_summary_text) > 100 else ""
-                    )
-                    # 종합문서요약(3), 종합문서전체(4), 확정여부(6) 컬럼만 갱신.
-                    # 일시/포함된질의건수/사용자구분(1,2,5)은 원본 그대로 둠.
-                    self.summary_sheet.update_cell(row_idx, 3, preview)
-                    self.summary_sheet.update_cell(row_idx, 4, new_summary_text)
-                    self.summary_sheet.update_cell(row_idx, 6, "확정됨")
-                    return True
-            return False
+
+            target_row = None
+            matched_by = ""
+
+            # 1순위: '일시'(타임스탬프)로 행 식별 — 기존 방식
+            if timestamp:
+                needle_ts = str(timestamp).strip()
+                for row_idx, row in enumerate(all_values[1:], start=2):
+                    if len(row) >= 1 and str(row[0]).strip() == needle_ts:
+                        target_row = row_idx
+                        matched_by = "timestamp"
+                        break
+
+            # 2순위(폴백): '종합문서전체'(4번째 열) 내용이 원본과 정확히 일치하는 행
+            if target_row is None and original_text:
+                needle_body = original_text.strip()
+                for row_idx, row in enumerate(all_values[1:], start=2):
+                    if len(row) >= 4 and str(row[3]).strip() == needle_body:
+                        target_row = row_idx
+                        matched_by = "content"
+                        break
+
+            if target_row is None:
+                print(
+                    "[경고] 종합문서 시트 갱신 실패: 해당 행을 찾지 못함 "
+                    f"(timestamp={timestamp!r}, 폴백매칭={'시도함' if original_text else '불가'})"
+                )
+                return "not_found"
+
+            preview = new_summary_text[:100].replace("\n", " ") + (
+                "..." if len(new_summary_text) > 100 else ""
+            )
+            # 종합문서요약(C), 종합문서전체(D), 확정여부(F) 열만 갱신.
+            # 일시(A)/포함된질의건수(B)/사용자구분(E)은 원본 그대로 둠.
+            # 3번의 개별 update_cell 대신 한 번의 batch_update로 원자적 처리.
+            self.summary_sheet.batch_update(
+                [
+                    {"range": f"C{target_row}", "values": [[preview]]},
+                    {"range": f"D{target_row}", "values": [[new_summary_text]]},
+                    {"range": f"F{target_row}", "values": [["확정됨"]]},
+                ],
+                value_input_option="RAW",
+            )
+            return "updated_by_timestamp" if matched_by == "timestamp" else "updated_by_content"
+
         except Exception as e:
             print(f"[경고] 종합문서 시트 갱신 실패: {e}")
-            return False
+            return f"error: {e}"
 
     def delete_summary(self, timestamp: str) -> bool:
         """

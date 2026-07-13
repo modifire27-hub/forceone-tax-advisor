@@ -12,15 +12,21 @@ streamlit_ui.py
   (백로그는 삭제되지 않고 "이전 대화 보기"에서 다시 펼쳐볼 수 있음)
 - 결과 저장: 기본은 타임스탬프 자동저장, 파일명/형식(md/docx/pdf) 직접 지정 가능
 - "전체 종합" 버튼: 현재 묶음 또는 백로그 포함 전체를 AI가 하나의 완성된 자문 문서로 재구성
-- 로그인 시 관리자(회계사)/직원 비밀번호로 역할이 자동 결정됨(역할 직접 선택 단계 없음).
-  관리자만 PIN 관리, 지식베이스 확정 저장, 검증대기 불러오기에 접근 가능
+- 개인별 아이디/비밀번호 로그인 (v1.11). 계정은 구글시트 '사용자' 탭에서 관리하며,
+  역할은 admin(관리자·회계사) / staff(직원) / customer(고객) 세 가지.
+  관리자만 PIN 관리, 지식베이스 확정 저장, 검증대기 불러오기, 사용자 관리에 접근 가능.
+  고객은 질의와 '본인이 만든' 종합 문서 조회만 가능(검색 기록 탭 자체가 보이지 않음).
 
 실행 방법:
     streamlit run streamlit_ui.py
 
 필요 환경변수(.env 또는 Streamlit Secrets):
-    ADMIN_PASSWORD   관리자(회계사) 로그인 비밀번호 (기존 APP_PASSWORD도 호환됨)
-    STAFF_PASSWORD   직원 로그인 비밀번호
+    MASTER_RESET_PASSWORD   비상 복구용 관리자 비밀번호 (반드시 설정할 것 —
+                            미설정 시 코드의 기본값이 그대로 쓰이는데, 저장소가
+                            공개되어 있으므로 사실상 무방비 상태가 됨)
+
+    ※ v1.11부터 ADMIN_PASSWORD / STAFF_PASSWORD / APP_PASSWORD는 더 이상 쓰지 않음.
+      개인 계정 발급이 끝나면 Streamlit Secrets에서 이 값들을 삭제해도 됨.
 
 Windows 환경 기준으로 작성됨.
 """
@@ -367,232 +373,263 @@ st.markdown(
 
 
 # ----------------------------------------------------------------------
-# 로그인 (관리자/직원 분리 — 2026-06-27 변경)
+# 로그인 (개인별 아이디/비밀번호 — 2026-07-13, v1.11)
 # ----------------------------------------------------------------------
-# 설계 의도 (2026-06-27 변경 — 단일 공통 비밀번호에서 역할별 분리로 전환):
-# - 기존에는 APP_PASSWORD 1개로 누구나 동일하게 들어온 뒤, 사이드바의 "사용자
-#   구분" 라디오로 본인이 직접 "직원/회계사"를 선택했음. 이건 자기보고
-#   (self-report)일 뿐 실제 권한 분리가 아니었음 — 직원도 라디오에서 "회계사"를
-#   선택하면 관리자 기능(지식베이스 확정 저장)에 그대로 접근 가능했음.
-# - 변경: 비밀번호 자체를 관리자용(ADMIN_PASSWORD)과 직원용(STAFF_PASSWORD)으로
-#   분리. 로그인 화면에서 입력한 비밀번호 값으로 역할이 자동 결정되며, 이후
-#   "역할을 직접 선택하는" 단계 자체가 없음 — 그래서 사이드바의 "사용자 구분"
-#   라디오는 제거함(11번째 줄 아래 사이드바 섹션 참고).
-# - 비밀번호 값은 코드에 직접 적지 않고 .env(로컬) 또는 Streamlit Secrets(웹
-#   배포 시)의 ADMIN_PASSWORD / STAFF_PASSWORD 값으로 관리함.
-# - 하위 호환: 기존 APP_PASSWORD만 설정된 환경(아직 이번 변경을 반영해 Secrets를
-#   갱신하지 않은 경우)에서도 막히지 않도록, ADMIN_PASSWORD가 없으면
-#   APP_PASSWORD를 관리자 비밀번호로 대신 사용함.
-# - "관리자"라는 이름을 쓴 이유: "회계사"라는 직무명을 그대로 쓰면, 향후 다른
-#   회계사가 추가로 이 시스템을 쓰게 될 때 "회계사=특정 한 사람"처럼 들려
-#   어색해질 수 있음. "관리자"는 권한 레벨을 가리키는 말이라 여러 명으로
-#   늘어나도 자연스러움 (실제로 관리자 역할을 쓰는 사람은 회계사임).
-# - 향후 고객 로그인을 추가할 때는 이 구조에 "customer" 역할을 한 단(段) 더
-#   추가하는 형태로 확장하면 됨 (개발계획서 8.6절 참고 — 고객 인증 방식은
-#   별도로 설계 필요, 공통 비밀번호 방식이 아니라 개인별 식별이 필요함).
-# ----------------------------------------------------------------------
-# 로그인 (관리자/직원 분리, 비밀번호는 구글시트 "계정설정" 탭에서 관리)
-# ----------------------------------------------------------------------
-# 설계 의도 (2026-06-27 변경 — 단일 공통 비밀번호에서 역할별 분리로 전환):
-# - 기존에는 APP_PASSWORD 1개로 누구나 동일하게 들어온 뒤, 사이드바의 "사용자
-#   구분" 라디오로 본인이 직접 "직원/회계사"를 선택했음. 이건 자기보고
-#   (self-report)일 뿐 실제 권한 분리가 아니었음 — 직원도 라디오에서 "회계사"를
-#   선택하면 관리자 기능(지식베이스 확정 저장)에 그대로 접근 가능했음.
-# - 변경: 비밀번호 자체를 관리자용/직원용으로 분리. 로그인 화면에서 입력한
-#   비밀번호 값으로 역할이 자동 결정되며, 이후 "역할을 직접 선택하는" 단계
-#   자체가 없음 — 그래서 사이드바의 "사용자 구분" 라디오는 제거함.
-# - 비밀번호 저장 위치 (2026-06-27 추가 변경 — .env/Secrets 대신 구글시트):
-#   PIN과 마찬가지로 평문이 아니라 sha256 해시만 구글시트 "계정설정" 탭에
-#   저장함(SheetLogger.set_account_password 등). .env(로컬)나 Streamlit
-#   Secrets(웹)에 미리 비밀번호를 적어둘 필요가 없어지고, 관리자가 로그인 후
-#   사이드바에서 언제든 두 비밀번호를 직접 변경할 수 있음.
-# - 최초 실행 시(계정설정 탭이 비어있는 경우): 로그인 화면 대신 "최초 계정
-#   설정" 화면을 띄워 그 자리에서 관리자/직원 비밀번호를 처음 만들게 함. 이
-#   화면은 인증 전 누구나 접근 가능한 상태이므로, 배포 직후 가능한 빨리
-#   설정을 완료하는 것을 전제로 함(의도적으로 약한 추가 보호장치를 두지 않음
-#   — 그것도 결국 별도 설정값이 필요해 ".env가 귀찮다"는 원래 문제를
-#   되살리기 때문).
-# - 구글시트 연동이 비활성 상태인 경우(.env/Secrets에 GOOGLE_SHEET_ID 등이
-#   없는 경우)에는 하위 호환을 위해 기존 ADMIN_PASSWORD/STAFF_PASSWORD(또는
-#   구버전 APP_PASSWORD) 환경변수 방식으로 자동 폴백함.
-# - 향후 고객 로그인을 추가할 때는 이 구조에 "customer" 역할을 한 단(段) 더
-#   추가하는 형태로 확장하면 됨 (개발계획서 8.6절 참고 — 고객 인증 방식은
-#   별도로 설계 필요, 공통 비밀번호 방식이 아니라 개인별 식별이 필요함).
+# 변천 과정:
+#   v1.3  APP_PASSWORD 1개 (공통 출입 통제). 역할은 사이드바 라디오로 본인이
+#         "직원/회계사"를 골랐는데, 이건 자기보고일 뿐 실제 권한 분리가 아니었음.
+#   v1.8  ADMIN_PASSWORD / STAFF_PASSWORD로 역할별 분리. 입력한 비밀번호 값으로
+#         역할이 자동 결정되므로 역할을 직접 고르는 단계가 사라짐.
+#   v1.9  비밀번호 해시를 구글시트 "계정설정" 탭으로 옮김(화면에서 변경 가능).
+#         + MASTER_RESET_PASSWORD(비상 복구 경로) 도입.
+#   v1.11 개인별 계정으로 전환 ← 지금.
+#
+# v1.11에서 바뀐 점:
+# - 구글시트 "사용자" 탭에 사람마다 한 행씩 계정을 둠. 로그인은 아이디 +
+#   비밀번호이며, 역할(admin/staff/customer)은 그 계정에 붙은 속성이라
+#   로그인 즉시 자동으로 결정됨.
+# - 비밀번호는 계정별 고유 솔트 + PBKDF2-HMAC-SHA256(10만 회)으로 해시해서만
+#   저장함(sheet_logger.py의 '사용자' 탭 주석 참고).
+# - 개인 식별이 가능해지면서, 검색기록·종합문서 시트에 '작성자'(아이디) 컬럼이
+#   함께 기록됨 → 감사 추적 가능. 고객(customer)은 이 컬럼을 기준으로 "본인이
+#   만든 종합문서"만 조회할 수 있음.
+# - 역할별 공용 비밀번호(ADMIN_PASSWORD / STAFF_PASSWORD / APP_PASSWORD)는
+#   더 이상 사용하지 않음. 개인 계정 발급을 마쳤다면 Streamlit Secrets에서
+#   해당 값들을 삭제해도 무방함.
+# - MASTER_RESET_PASSWORD(비상 복구)는 그대로 유지함. '사용자' 탭 접근 자체가
+#   실패하면 아무도 로그인할 수 없게 되므로, 최후의 경로 하나는 남겨둬야 함.
+#   ★ 이 값은 Streamlit Secrets에 반드시 강한 값으로 설정할 것. 설정하지 않으면
+#     코드의 기본값이 그대로 쓰이는데, 저장소가 공개되어 있어 사실상 무방비임.
 @st.cache_resource(show_spinner=False)
 def get_login_sheet_logger():
     """
     로그인 단계에서만 쓰는 가벼운 SheetLogger 인스턴스.
     TaxAdvisorEngine은 로그인 통과 후에야 만들어지므로(엔진 초기화 자체가
     무거운 작업이라 비인증 사용자에게는 실행하지 않으려는 의도), 로그인
-    체크 시점에는 이 별도 인스턴스로 "계정설정" 탭에 접근함. 이후
+    체크 시점에는 이 별도 인스턴스로 '사용자' 탭에 접근함. 이후
     TaxAdvisorEngine 내부에서 한 번 더 SheetLogger를 만들지만, 둘 다
     가벼운 클라이언트 객체일 뿐이라 중복 비용은 미미함.
     """
     return SheetLogger()
 
 
-def render_first_time_account_setup(login_logger: SheetLogger):
-    """
-    '계정설정' 탭이 비어있을 때(앱을 처음 띄운 경우) 보여주는 화면.
-    관리자/직원 비밀번호를 그 자리에서 처음 만들게 함.
-    """
-    login_wrap = st.container(key="pf_login_wrap")
-    with login_wrap:
-        st.markdown(
-            '<div class="pf-login-panel">'
-            '<p class="pf-login-eyebrow">최초 설정</p>'
-            '<p class="pf-login-heading">관리자·직원 비밀번호를 만들어주세요</p>'
-            '<p class="pf-login-desc">아직 비밀번호가 설정되지 않았습니다.<br>'
-            '관리자(회계사)와 직원이 각각 사용할 비밀번호를 처음 만들어주세요.</p>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
+ROLE_LABELS = {
+    "admin": "관리자 (회계사)",
+    "staff": "직원",
+    "customer": "고객",
+}
 
-        with st.form("first_time_setup_form"):
-            admin_pw = st.text_input("관리자(회계사) 비밀번호 (4자 이상)", type="password")
-            staff_pw = st.text_input("직원 비밀번호 (4자 이상)", type="password")
-            submitted = st.form_submit_button("설정 완료", type="primary")
-
-    if submitted:
-        if len(admin_pw.strip()) < 4 or len(staff_pw.strip()) < 4:
-            st.error("두 비밀번호 모두 4자 이상으로 설정해주세요.")
-        elif admin_pw.strip() == staff_pw.strip():
-            st.error("관리자와 직원 비밀번호는 서로 다르게 설정해주세요.")
-        else:
-            login_logger.set_account_password("admin", admin_pw)
-            login_logger.set_account_password("staff", staff_pw)
-            st.success("설정이 완료되었습니다. 이제 해당 비밀번호로 로그인해주세요.")
-            st.rerun()
+# 검색 기록의 '사용자구분' 컬럼에 남길 표기 (기존 값과의 호환을 위해 유지)
+ROLE_USER_TYPES = {
+    "admin": "회계사",
+    "staff": "직원",
+    "customer": "고객",
+}
 
 
 def _get_master_reset_password() -> str:
     """
     비상 복구 비밀번호 값. .env/Secrets의 MASTER_RESET_PASSWORD가 있으면 그 값을,
-    없으면 기본값 "4119"를 사용함. 기본값을 그대로 두는 건 보안상 바람직하지
-    않으므로, 이 값으로 로그인하면 화면에 경고 배너를 띄워 변경을 유도함.
+    없으면 기본값 "4119"를 사용함.
+
+    보안 경고: 이 기본값은 공개 GitHub 저장소의 소스에 그대로 적혀 있고 앱 URL도
+    외부에 공개되어 있으므로, Secret으로 재정의하지 않으면 저장소를 열어본 누구나
+    관리자로 로그인할 수 있는 상태가 됨. 반드시 MASTER_RESET_PASSWORD를 설정할 것.
+    이 값으로 로그인하면 화면에 경고 배너를 띄워 조치를 유도함.
     """
     return os.getenv("MASTER_RESET_PASSWORD", "").strip() or "4119"
 
 
-def check_app_password():
+def _login_panel(eyebrow: str, heading: str, desc_html: str):
+    """로그인/최초설정 화면의 공통 상단 패널."""
+    st.markdown(
+        f'<div class="pf-login-panel">'
+        f'<p class="pf-login-eyebrow">{eyebrow}</p>'
+        f'<p class="pf-login-heading">{heading}</p>'
+        f'<p class="pf-login-desc">{desc_html}</p>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_first_time_admin_setup(login_logger: SheetLogger):
     """
-    입력한 비밀번호가 관리자/직원 비밀번호 중 무엇과 일치하는지 확인.
+    '사용자' 탭에 계정이 하나도 없을 때(앱을 처음 띄웠거나, 개인별 계정 체계로
+    막 전환한 직후) 보여주는 화면. 최초 관리자 계정 1개를 그 자리에서 만들게 함.
+
+    설계 의도 (v1.11):
+    - 이 화면은 인증 전 누구나 접근 가능하므로, 배포 직후 가능한 한 빨리 첫
+      관리자 계정을 만드는 것을 전제로 함. 계정이 하나라도 생기면 이 화면은
+      다시는 나타나지 않고 곧바로 일반 로그인 화면으로 바뀜.
+    - 이후의 직원/고객 계정은 이 관리자가 '관리' 탭의 사용자 관리에서 발급함.
+    """
+    login_wrap = st.container(key="pf_login_wrap")
+    with login_wrap:
+        _login_panel(
+            "최초 설정",
+            "관리자 계정을 만들어주세요",
+            "아직 등록된 계정이 없습니다.<br>"
+            "가장 먼저 사용할 관리자(회계사) 계정을 만들어주세요.<br>"
+            "이후 직원·고객 계정은 '관리' 탭에서 발급할 수 있습니다.",
+        )
+
+        with st.form("first_time_admin_form"):
+            new_id = st.text_input("아이디 (영문/숫자, 공백 없이)")
+            new_name = st.text_input("이름")
+            new_pw = st.text_input("비밀번호 (4자 이상)", type="password")
+            new_pw_confirm = st.text_input("비밀번호 확인", type="password")
+            submitted = st.form_submit_button("관리자 계정 만들기", type="primary")
+
+    if submitted:
+        if new_pw != new_pw_confirm:
+            st.error("입력한 비밀번호가 서로 다릅니다.")
+        else:
+            ok, msg = login_logger.create_user(
+                user_id=new_id, password=new_pw, role="admin", name=new_name
+            )
+            if ok:
+                st.success(msg + " 이제 이 아이디로 로그인해주세요.")
+                st.rerun()
+            else:
+                st.error(msg)
+
+
+def authenticate():
+    """
+    개인별 아이디/비밀번호 로그인 (v1.11 — 역할별 공용 비밀번호에서 전환).
+
+    설계 의도:
+    - v1.10까지는 ADMIN_PASSWORD / STAFF_PASSWORD(또는 구글시트 '계정설정' 탭의
+      역할별 해시 1개씩)로 로그인했음. 같은 역할의 사람은 전부 같은 비밀번호를
+      공유하므로 "누가 질의했는지" 추적이 불가능했고, 퇴사자만 골라서 차단할
+      방법도 없었음(개발계획서 8.1절의 남은 과제).
+    - v1.11: 구글시트 '사용자' 탭에 개인별 계정을 두고, 아이디 + 비밀번호로
+      로그인함. 역할(admin/staff/customer)은 그 계정에 붙어 있는 속성이므로
+      로그인 시 자동으로 결정되며, 사용자가 역할을 직접 고르는 단계는 없음.
+    - 비상 복구 비밀번호(MASTER_RESET_PASSWORD)는 그대로 유지함. '사용자' 탭
+      접근 자체가 실패하면(구글시트 장애 등) 아무도 로그인할 수 없게 되므로,
+      최후의 경로 하나는 반드시 남겨둬야 함.
 
     Returns
     -------
-    str | None
-        "admin" 또는 "staff" — 로그인 성공 시 역할 문자열.
+    dict | None
+        로그인 성공 시 {"user_id", "role", "name"}.
         아직 로그인 전이면 None (호출하는 쪽에서 st.stop()으로 이어감).
     """
-    if st.session_state.get("app_role"):
-        return st.session_state.app_role
+    if st.session_state.get("auth_user"):
+        return st.session_state["auth_user"]
 
     login_logger = get_login_sheet_logger()
 
-    if login_logger.enabled:
-        # 구글시트 기반 — "최초 계정 설정"이 아직 안 끝났으면 그 화면을 보여줌
-        if not login_logger.is_account_setup_done():
-            render_first_time_account_setup(login_logger)
-            return None
-
+    # ------------------------------------------------------------------
+    # 폴백: 구글시트 연동/'사용자' 탭을 쓸 수 없는 경우
+    # ------------------------------------------------------------------
+    # 계정 정보가 구글시트에 있으므로, 시트에 접근할 수 없으면 정상 로그인은
+    # 원천적으로 불가능함. 이때 아무나 그냥 통과시키면 안 되고(과거 코드는
+    # 로컬 환경 편의를 위해 관리자로 그냥 통과시켰는데, 웹 배포에서는 위험),
+    # 비상 복구 비밀번호만 받는 화면을 보여줌.
+    if not login_logger.users_enabled():
         login_wrap = st.container(key="pf_login_wrap")
         with login_wrap:
-            st.markdown(
-                '<div class="pf-login-panel">'
-                '<p class="pf-login-eyebrow">사내 로그인</p>'
-                '<p class="pf-login-heading">비밀번호를 입력해주세요</p>'
-                '<p class="pf-login-desc">포스원 회계법인 직원 전용 화면입니다.<br>'
-                '관리자(회계사) 또는 직원 비밀번호를 입력해주세요.</p>'
-                '</div>',
-                unsafe_allow_html=True,
+            _login_panel(
+                "비상 로그인",
+                "계정 정보를 불러올 수 없습니다",
+                "구글시트의 '사용자' 탭에 접근하지 못했습니다.<br>"
+                "비상 복구 비밀번호로만 로그인할 수 있습니다.",
             )
-
-            with st.form("app_login_form"):
-                pw_input = st.text_input("비밀번호", type="password", label_visibility="collapsed")
+            if login_logger.error_message and login_logger.error_message != "__NOT_CONFIGURED__":
+                st.caption(f"원인: {login_logger.error_message}")
+            with st.form("master_login_form"):
+                pw_input = st.text_input("비상 복구 비밀번호", type="password")
                 submitted = st.form_submit_button("입장", type="primary")
 
         if submitted:
-            if login_logger.verify_account_password("admin", pw_input):
-                st.session_state.app_role = "admin"
-                st.rerun()
-            elif login_logger.verify_account_password("staff", pw_input):
-                st.session_state.app_role = "staff"
-                st.rerun()
-            elif pw_input.strip() and pw_input.strip() == _get_master_reset_password():
-                # 비상 복구 비밀번호 (2026-07-09 추가):
-                # 계정설정 탭의 정상 비밀번호를 잊어버렸거나(원인 불명 포함)
-                # 잠긴 경우를 대비한 "항상 통하는" 백업 열쇠. 기본값은 "4119"이며
-                # .env/Secrets의 MASTER_RESET_PASSWORD로 바꿀 수 있음. 이 값으로
-                # 들어오면 관리자 권한을 주되, 화면에 눈에 띄게 경고를 남겨 즉시
-                # 정식 비밀번호로 바꾸도록 유도함(그대로 두면 보안 구멍이므로).
-                st.session_state.app_role = "admin"
+            if pw_input.strip() and pw_input.strip() == _get_master_reset_password():
+                st.session_state["auth_user"] = {
+                    "user_id": "(비상복구)",
+                    "role": "admin",
+                    "name": "비상 복구",
+                }
                 st.session_state["_logged_in_via_master_reset"] = True
                 st.rerun()
             else:
                 st.error("비밀번호가 일치하지 않습니다.")
-
         return None
 
-    # 구글시트 로깅이 비활성 상태인 경우: 하위 호환을 위해 환경변수 방식으로 폴백
-    admin_password = os.getenv("ADMIN_PASSWORD", "").strip() or os.getenv("APP_PASSWORD", "").strip()
-    staff_password = os.getenv("STAFF_PASSWORD", "").strip()
+    # ------------------------------------------------------------------
+    # 부트스트랩: 계정이 하나도 없으면 최초 관리자 계정을 만들게 함
+    # ------------------------------------------------------------------
+    if not login_logger.has_any_user():
+        render_first_time_admin_setup(login_logger)
+        return None
 
-    if not admin_password:
-        st.warning(
-            "구글시트 연동이 비활성 상태이고, ADMIN_PASSWORD(또는 기존 APP_PASSWORD)도 "
-            "설정되어 있지 않습니다. 로컬 환경에서는 관리자 권한으로 그대로 진행되지만, "
-            "웹에 배포할 때는 구글시트 연동을 설정하거나 .env/Secrets에 ADMIN_PASSWORD와 "
-            "STAFF_PASSWORD를 반드시 설정해야 합니다."
-        )
-        st.session_state.app_role = "admin"
-        return "admin"
-
+    # ------------------------------------------------------------------
+    # 정상 로그인 (아이디 + 비밀번호)
+    # ------------------------------------------------------------------
     login_wrap = st.container(key="pf_login_wrap")
     with login_wrap:
-        st.markdown(
-            '<div class="pf-login-panel">'
-            '<p class="pf-login-eyebrow">사내 로그인</p>'
-            '<p class="pf-login-heading">비밀번호를 입력해주세요</p>'
-            '<p class="pf-login-desc">포스원 회계법인 직원 전용 화면입니다.<br>'
-            '관리자(회계사) 또는 직원 비밀번호를 입력해주세요.</p>'
-            '</div>',
-            unsafe_allow_html=True,
+        _login_panel(
+            "로그인",
+            "아이디와 비밀번호를 입력해주세요",
+            "포스원 회계법인 세무 자문 시스템입니다.<br>"
+            "계정이 없거나 비밀번호를 잊으셨다면 관리자에게 문의해주세요.",
         )
 
         with st.form("app_login_form"):
-            pw_input = st.text_input("비밀번호", type="password", label_visibility="collapsed")
+            id_input = st.text_input("아이디")
+            pw_input = st.text_input("비밀번호", type="password")
             submitted = st.form_submit_button("입장", type="primary")
 
     if submitted:
-        if pw_input == admin_password:
-            st.session_state.app_role = "admin"
+        user = login_logger.verify_user(id_input, pw_input)
+        if user:
+            login_logger.touch_last_login(user["user_id"])
+            st.session_state["auth_user"] = user
+            st.session_state["_logged_in_via_master_reset"] = False
             st.rerun()
-        elif staff_password and pw_input == staff_password:
-            st.session_state.app_role = "staff"
+        elif pw_input.strip() and pw_input.strip() == _get_master_reset_password():
+            # 비상 복구 비밀번호: 정상 계정 인증이 실패했을 때만 마지막으로
+            # 확인함. 이 경로로 들어오면 관리자 권한을 주되, 화면에 눈에 띄는
+            # 경고를 남겨 정식 계정으로 돌아가도록 유도함.
+            st.session_state["auth_user"] = {
+                "user_id": "(비상복구)",
+                "role": "admin",
+                "name": "비상 복구",
+            }
+            st.session_state["_logged_in_via_master_reset"] = True
             st.rerun()
         else:
-            st.error("비밀번호가 일치하지 않습니다.")
+            # 실패 원인을 "아이디가 없음/비밀번호 틀림"으로 구분해서 알려주지
+            # 않음 — 그 자체가 "이 아이디는 존재한다"는 정보를 흘리기 때문.
+            st.error("아이디 또는 비밀번호가 일치하지 않습니다. (비활성 처리된 계정일 수도 있습니다)")
 
     return None
 
 
-app_role = check_app_password()
-if not app_role:
-    st.stop()  # 비밀번호가 맞을 때까지 아래 모든 코드(엔진 초기화, 화면 등)를 실행하지 않음
+auth_user = authenticate()
+if not auth_user:
+    st.stop()  # 로그인 전에는 아래 모든 코드(엔진 초기화, 화면 등)를 실행하지 않음
 
-# 화면 곳곳에서 "지금 로그인한 사람이 관리자인지"를 간단히 체크하기 위한 변수.
-# 검색 기록 로깅 시 "사용자구분" 컬럼에도 이 값을 그대로 사용함(아래 사이드바
-# 섹션의 user_type 자리를 대체).
+# 화면 곳곳에서 쓰는 현재 로그인 사용자 정보.
+app_role = auth_user.get("role", "staff")
+user_id = auth_user.get("user_id", "")
+user_name = auth_user.get("name") or user_id
+
 is_admin = app_role == "admin"
-user_type = "회계사" if is_admin else "직원"
+is_staff = app_role == "staff"
+is_customer = app_role == "customer"
+
+# 구글시트 로깅의 '사용자구분' 컬럼에 남길 표기(기존 값 체계 유지).
+# 개인 식별은 별도의 '작성자' 컬럼(user_id)이 담당함.
+user_type = ROLE_USER_TYPES.get(app_role, "직원")
 
 if st.session_state.get("_logged_in_via_master_reset"):
     st.error(
-        "비상 복구용 기본 비밀번호로 로그인했습니다. 보안을 위해 지금 바로 "
-        "'관리' 탭의 '로그인 비밀번호 관리'에서 관리자/직원 비밀번호를 새로 설정해주세요."
+        "비상 복구용 비밀번호로 로그인했습니다. 이 경로는 정상 경로가 아닙니다. "
+        "'관리' 탭의 '사용자 관리'에서 정식 관리자 계정을 만들고, "
+        "MASTER_RESET_PASSWORD Secret이 기본값이 아닌 강한 값으로 설정되어 있는지 "
+        "반드시 확인해주세요."
     )
-
-
 # ----------------------------------------------------------------------
 # 엔진 초기화 (세션당 1회, 캐시)
 # ----------------------------------------------------------------------
@@ -1871,9 +1908,16 @@ with st.sidebar:
 
     st.divider()
     st.subheader("로그인 정보")
-    st.write(f"현재 역할: **{'관리자 (회계사)' if is_admin else '직원'}**")
+    st.write(f"**{user_name}** ({user_id})")
+    st.write(f"역할: **{ROLE_LABELS.get(app_role, app_role)}**")
     if st.button("로그아웃", key="logout_btn"):
-        st.session_state.app_role = None
+        # 세션에 남아있는 확정 작업 대상까지 함께 비운다. 다른 사람이 이어서
+        # 로그인했을 때 앞사람의 작업 공간이 그대로 떠 있으면 안 되기 때문.
+        st.session_state["auth_user"] = None
+        st.session_state["_logged_in_via_master_reset"] = False
+        st.session_state["kb_confirm_target"] = None
+        st.session_state["_loaded_logs"] = []
+        st.session_state["_loaded_summaries"] = []
         st.rerun()
 
 
@@ -1919,9 +1963,25 @@ def run_summary(turns):
 # ----------------------------------------------------------------------
 # 상단 탭: 질의 / 검색 기록 / 종합 문서 / 관리
 # ----------------------------------------------------------------------
-tab_query, tab_logs, tab_docs, tab_admin = st.tabs(
-    ["질의", "검색 기록", "종합 문서", "관리"]
-)
+# 역할에 따라 보이는 탭이 달라짐 (v1.11):
+#   - admin / staff : 질의 · 검색 기록 · 종합 문서 · 관리 (기존과 동일)
+#   - customer      : 질의 · 종합 문서 · 관리 (검색 기록 탭 자체가 없음)
+# 고객에게 '검색 기록'을 감추는 이유: 이 탭은 사내 전체의 질의 로그와
+# 지식베이스 조회를 담고 있어, 다른 고객의 사업 내용까지 보이게 됨.
+# 탭을 만들되 안에서 막는 게 아니라 탭 자체를 만들지 않는다 — 화면에 보이는
+# 것만으로도 "여긴 뭐지?" 하는 혼란과 시도를 유발하기 때문.
+_tab_labels = ["질의"]
+if not is_customer:
+    _tab_labels.append("검색 기록")
+_tab_labels += ["종합 문서", "관리"]
+
+_tab_objs = st.tabs(_tab_labels)
+_tab_map = dict(zip(_tab_labels, _tab_objs))
+
+tab_query = _tab_map["질의"]
+tab_logs = _tab_map.get("검색 기록")  # 고객이면 None
+tab_docs = _tab_map["종합 문서"]
+tab_admin = _tab_map["관리"]
 
 with tab_query:
     # ----------------------------------------------------------------------
@@ -2076,6 +2136,7 @@ with tab_query:
                     question=user_question.strip(),
                     answer=answer,
                     user_type=user_type,
+                    user_id=user_id,
                 )
                 # 지식베이스 확정 시 검색기록 탭의 해당 행을 정확히 찾아 "확정됨"
                 # 표시를 남기기 위한 값. log()가 실제로 사용한 타임스탬프를 그대로
@@ -2165,6 +2226,7 @@ with tab_query:
                     turns_count=st.session_state.summary_doc_turns_count,
                     summary_text=st.session_state.summary_doc,
                     user_type=user_type,
+                    user_id=user_id,
                 )
             else:
                 st.session_state.summary_doc_source_ts = None
@@ -2245,6 +2307,7 @@ with tab_query:
                                     turns_count=len(bundle["turns"]),
                                     summary_text=summary_text,
                                     user_type=user_type,
+                                    user_id=user_id,
                                 )
                             else:
                                 st.session_state[f"{backlog_summary_key}_source_ts"] = None
@@ -2306,6 +2369,7 @@ with tab_query:
                     turns_count=st.session_state.summary_doc_turns_count,
                     summary_text=st.session_state.summary_doc,
                     user_type=user_type,
+                    user_id=user_id,
                 )
             else:
                 st.session_state.summary_doc_source_ts = None
@@ -2317,88 +2381,92 @@ with tab_query:
     # 지식베이스 확정 저장 작업 공간 (화면 맨 아래, 화면 전체 너비)
     # ----------------------------------------------------------------------
 
-with tab_logs:
-    # 팝업에서 확정 저장을 눌러 작업 대상이 지정된 경우, 작업 공간은 '질의' 탭
-    # 맨 위에 열린다. 사용자는 여전히 이 탭에 머물러 있으므로 어디로 가야 하는지
-    # 명확히 알려준다.
-    if is_admin and st.session_state.get("kb_confirm_target"):
-        st.info("확정 작업 대상이 지정되어 있습니다. 위 '질의' 탭 맨 위에서 교차검증과 확정을 진행하세요.")
-    _c_head, _c_kb = st.columns([3, 1])
-    with _c_head:
-        st.subheader("검색 기록")
-    with _c_kb:
-        if st.button("지식베이스 조회", key="open_kb_dialog_btn", type="primary", use_container_width=True):
-            show_knowledge_base_dialog()
-    st.caption("개별 질문 하나하나에 대한 답변 기록입니다.")
+# 고객(customer)에게는 이 탭 자체가 만들어지지 않으므로(tab_logs is None),
+# 블록 전체를 건너뛴다. 탭 안에서 권한 체크로 막는 방식이 아니라, 렌더링
+# 자체를 하지 않아 구글시트 조회 호출도 아예 발생하지 않게 한다.
+if tab_logs is not None:
+    with tab_logs:
+        # 팝업에서 확정 저장을 눌러 작업 대상이 지정된 경우, 작업 공간은 '질의' 탭
+        # 맨 위에 열린다. 사용자는 여전히 이 탭에 머물러 있으므로 어디로 가야 하는지
+        # 명확히 알려준다.
+        if is_admin and st.session_state.get("kb_confirm_target"):
+            st.info("확정 작업 대상이 지정되어 있습니다. 위 '질의' 탭 맨 위에서 교차검증과 확정을 진행하세요.")
+        _c_head, _c_kb = st.columns([3, 1])
+        with _c_head:
+            st.subheader("검색 기록")
+        with _c_kb:
+            if st.button("지식베이스 조회", key="open_kb_dialog_btn", type="primary", use_container_width=True):
+                show_knowledge_base_dialog()
+        st.caption("개별 질문 하나하나에 대한 답변 기록입니다.")
 
-    if engine.sheet_logger and engine.sheet_logger.enabled:
-        n_logs = st.slider("불러올 최근 기록 수", min_value=10, max_value=200, value=30, step=10)
-        search_term = st.text_input("질문 내용 검색 (비워두면 전체 표시)", key="log_search_term")
+        if engine.sheet_logger and engine.sheet_logger.enabled:
+            n_logs = st.slider("불러올 최근 기록 수", min_value=10, max_value=200, value=30, step=10)
+            search_term = st.text_input("질문 내용 검색 (비워두면 전체 표시)", key="log_search_term")
 
-        if st.button("기록 불러오기", key="load_logs_btn"):
-            with st.spinner("구글 시트에서 기록을 불러오는 중..."):
-                recent = engine.sheet_logger.get_recent_logs(n_logs)
-            st.session_state["_loaded_logs"] = recent
+            if st.button("기록 불러오기", key="load_logs_btn"):
+                with st.spinner("구글 시트에서 기록을 불러오는 중..."):
+                    recent = engine.sheet_logger.get_recent_logs(n_logs)
+                st.session_state["_loaded_logs"] = recent
 
-        loaded = st.session_state.get("_loaded_logs", [])
-        if loaded:
-            filtered = loaded
-            if search_term.strip():
-                filtered = [
-                    row for row in loaded
-                    if search_term.strip() in row.get("질문", "")
-                ]
-            st.caption(f"{len(filtered)}건 표시 (전체 불러온 기록 {len(loaded)}건 중)")
+            loaded = st.session_state.get("_loaded_logs", [])
+            if loaded:
+                filtered = loaded
+                if search_term.strip():
+                    filtered = [
+                        row for row in loaded
+                        if search_term.strip() in row.get("질문", "")
+                    ]
+                st.caption(f"{len(filtered)}건 표시 (전체 불러온 기록 {len(loaded)}건 중)")
 
-            for idx, row in enumerate(filtered):
-                # 목록 한 줄 — 시각적 위계:
-                #   확정 배지(초록 알약) · 메타(흐린 작은 글씨) · 질문(진한 본문)
-                # 이모지 대신 색·크기·농도로 정보 위계를 만든다.
-                _confirmed = row.get("확정여부") == "확정됨"
-                _badge = (
-                    "<span style='background:#E1F5EE;color:#0F6E56;font-size:11px;"
-                    "padding:2px 8px;border-radius:10px;margin-right:8px;"
-                    "white-space:nowrap;'>확정</span>"
-                    if _confirmed else ""
-                )
-                _c_txt, _c_btn = st.columns([9, 1])
-                with _c_txt:
+                for idx, row in enumerate(filtered):
+                    # 목록 한 줄 — 시각적 위계:
+                    #   확정 배지(초록 알약) · 메타(흐린 작은 글씨) · 질문(진한 본문)
+                    # 이모지 대신 색·크기·농도로 정보 위계를 만든다.
+                    _confirmed = row.get("확정여부") == "확정됨"
+                    _badge = (
+                        "<span style='background:#E1F5EE;color:#0F6E56;font-size:11px;"
+                        "padding:2px 8px;border-radius:10px;margin-right:8px;"
+                        "white-space:nowrap;'>확정</span>"
+                        if _confirmed else ""
+                    )
+                    _c_txt, _c_btn = st.columns([9, 1])
+                    with _c_txt:
+                        st.markdown(
+                            f"<div style='text-align:left; padding:8px 0 2px;'>"
+                            f"{_badge}"
+                            f"<span style='color:#888780;font-size:12px;'>"
+                            f"{row.get('일시', '')} · {row.get('사용자구분', '')}</span><br>"
+                            f"<span style='font-size:14px;'>"
+                            f"{row.get('질문', '')[:60]}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                    with _c_btn:
+                        if st.button("열기", key=f"log_open_{idx}"):
+                            st.session_state["_dialog_log_row"] = row
+                            show_log_dialog()
                     st.markdown(
-                        f"<div style='text-align:left; padding:8px 0 2px;'>"
-                        f"{_badge}"
-                        f"<span style='color:#888780;font-size:12px;'>"
-                        f"{row.get('일시', '')} · {row.get('사용자구분', '')}</span><br>"
-                        f"<span style='font-size:14px;'>"
-                        f"{row.get('질문', '')[:60]}</span>"
-                        f"</div>",
+                        "<hr style='margin:4px 0; border:none; border-top:1px solid #EEE;'>",
                         unsafe_allow_html=True,
                     )
-                with _c_btn:
-                    if st.button("열기", key=f"log_open_{idx}"):
-                        st.session_state["_dialog_log_row"] = row
-                        show_log_dialog()
-                st.markdown(
-                    "<hr style='margin:4px 0; border:none; border-top:1px solid #EEE;'>",
-                    unsafe_allow_html=True,
+            else:
+                st.write("위 '기록 불러오기' 버튼을 눌러 구글 시트에서 기록을 가져오세요.")
+        else:
+            # enabled=False인 두 가지 경우를 구분해서 보여줌:
+            # (1) 아예 설정을 안 한 경우 (error_message가 비어있음) → 안내문만 표시
+            # (2) 설정을 시도했는데 실패한 경우 (error_message가 있음) → 실제 실패 원인을 그대로 보여줌
+            #     (이전에는 두 경우 모두 같은 안내문으로 뭉뚱그려져서, 실제로 무엇이 잘못됐는지
+            #     화면만 보고는 알 수 없었음. 진단을 쉽게 하기 위해 분리함.)
+            error_msg = engine.sheet_logger.error_message if engine.sheet_logger else ""
+            if error_msg:
+                st.error(f"구글 시트 로깅 설정을 시도했지만 실패했습니다.\n\n원인: {error_msg}")
+            else:
+                st.info(
+                    "구글 시트 로깅 미사용.\n\n"
+                    "- 로컬 환경: `.env`에 GOOGLE_SHEET_ID, GOOGLE_CREDENTIALS_PATH를 설정하세요.\n"
+                    "- 웹 배포 환경: Streamlit Secrets에 GOOGLE_SHEET_ID, GOOGLE_CREDENTIALS_JSON을 설정하세요.\n\n"
+                    "설정하면 모든 질의응답이 구글 스프레드시트에 자동 기록됩니다."
                 )
-        else:
-            st.write("위 '기록 불러오기' 버튼을 눌러 구글 시트에서 기록을 가져오세요.")
-    else:
-        # enabled=False인 두 가지 경우를 구분해서 보여줌:
-        # (1) 아예 설정을 안 한 경우 (error_message가 비어있음) → 안내문만 표시
-        # (2) 설정을 시도했는데 실패한 경우 (error_message가 있음) → 실제 실패 원인을 그대로 보여줌
-        #     (이전에는 두 경우 모두 같은 안내문으로 뭉뚱그려져서, 실제로 무엇이 잘못됐는지
-        #     화면만 보고는 알 수 없었음. 진단을 쉽게 하기 위해 분리함.)
-        error_msg = engine.sheet_logger.error_message if engine.sheet_logger else ""
-        if error_msg:
-            st.error(f"구글 시트 로깅 설정을 시도했지만 실패했습니다.\n\n원인: {error_msg}")
-        else:
-            st.info(
-                "구글 시트 로깅 미사용.\n\n"
-                "- 로컬 환경: `.env`에 GOOGLE_SHEET_ID, GOOGLE_CREDENTIALS_PATH를 설정하세요.\n"
-                "- 웹 배포 환경: Streamlit Secrets에 GOOGLE_SHEET_ID, GOOGLE_CREDENTIALS_JSON을 설정하세요.\n\n"
-                "설정하면 모든 질의응답이 구글 스프레드시트에 자동 기록됩니다."
-            )
 
 
 with tab_docs:
@@ -2411,6 +2479,13 @@ with tab_docs:
         "(개별 질문 기록과는 별도 탭에 저장되어 섞이지 않습니다). "
         "'미확정' 배지가 붙은 문서는 검증 절차를 거치지 않은 AI 생성 문서이니 참고하세요."
     )
+    if is_customer:
+        # 고객은 본인이 만든 문서만 조회 가능 (v1.11). 필터 기준은 구글시트
+        # '종합문서' 탭의 '작성자' 컬럼 = 로그인 아이디.
+        # 참고: 개인별 계정 도입 이전에 쌓인 행은 '작성자'가 비어 있으므로
+        # 고객 화면에는 전혀 나타나지 않음 — 의도된 동작이며, 오히려 과거
+        # 사내 문서가 고객에게 노출되지 않아 안전한 쪽임.
+        st.info("본인이 생성한 종합 문서만 표시됩니다.")
     if engine.sheet_logger and engine.sheet_logger.enabled:
         n_summaries = st.slider(
             "불러올 최근 종합 문서 수", min_value=5, max_value=100, value=20, step=5, key="n_summaries_slider"
@@ -2418,7 +2493,10 @@ with tab_docs:
 
         if st.button("종합 문서 기록 불러오기", key="load_summaries_btn"):
             with st.spinner("구글 시트에서 종합 문서 기록을 불러오는 중..."):
-                recent_summaries = engine.sheet_logger.get_recent_summaries(n_summaries)
+                recent_summaries = engine.sheet_logger.get_recent_summaries(
+                    n_summaries,
+                    author=(user_id if is_customer else None),
+                )
             st.session_state["_loaded_summaries"] = recent_summaries
 
         loaded_summaries = st.session_state.get("_loaded_summaries", [])
@@ -2502,49 +2580,185 @@ with tab_admin:
                             st.rerun()
 
         # ------------------------------------------------------------------
-        # 로그인 비밀번호 관리 (2026-06-27 추가)
+        # 사용자 관리 (v1.11 — 2026-07-13, 역할별 공용 비밀번호를 대체)
         # ------------------------------------------------------------------
-        # 관리자/직원 로그인 비밀번호를 .env/Secrets가 아니라 여기서 직접
-        # 변경할 수 있게 함(PIN 변경과 동일한 패턴 — 현재 비밀번호 확인 후 변경).
-        # 구글시트 연동이 비활성 상태면 이 기능 자체가 의미 없으므로(환경변수
-        # 방식으로 폴백 중이라는 뜻) 숨김.
-        if engine.sheet_logger and engine.sheet_logger.enabled:
-            with st.expander("로그인 비밀번호 관리", expanded=False):
-                st.caption("관리자/직원이 로그인할 때 쓰는 비밀번호입니다. 변경 시 즉시 적용됩니다.")
-                pw_role_label = st.radio(
-                    "변경할 대상", options=["관리자(회계사)", "직원"], horizontal=True, key="pw_change_role"
-                )
-                pw_role = "admin" if pw_role_label == "관리자(회계사)" else "staff"
-                with st.form("change_login_pw_form", clear_on_submit=True):
-                    current_admin_pw = st.text_input(
-                        "현재 관리자(회계사) 로그인 비밀번호",
-                        type="password",
-                        help="지식베이스 확정용 PIN이 아니라, 로그인 화면에서 입력하는 "
-                        "관리자 비밀번호입니다. 실수로 잘못 바꾸는 것을 막기 위한 본인 확인입니다.",
-                    )
-                    new_login_pw = st.text_input("새 비밀번호 (4자 이상)", type="password")
-                    new_login_pw_confirm = st.text_input("새 비밀번호 확인", type="password")
-                    if st.form_submit_button("비밀번호 변경"):
-                        # 비상 복구 비밀번호로 로그인한 경우, 원래 비밀번호를
-                        # 몰라서 여기 온 것이므로 본인확인 단계에서도 비상
-                        # 복구 비밀번호를 그대로 인정함(그래야 실제로 복구가
-                        # 끝까지 됨 — 안 그러면 "잊어버린 비밀번호를 다시
-                        # 입력하라"는 막다른 길이 됨).
-                        current_ok = (
-                            engine.sheet_logger.verify_account_password("admin", current_admin_pw)
-                            or current_admin_pw.strip() == _get_master_reset_password()
-                        )
-                        if not current_ok:
-                            st.error("현재 관리자(회계사) 비밀번호가 일치하지 않습니다.")
-                        elif len(new_login_pw.strip()) < 4:
-                            st.error("새 비밀번호는 4자 이상으로 설정해주세요.")
-                        elif new_login_pw != new_login_pw_confirm:
-                            st.error("입력한 새 비밀번호가 서로 다릅니다.")
-                        else:
-                            engine.sheet_logger.set_account_password(pw_role, new_login_pw)
-                            st.session_state["_logged_in_via_master_reset"] = False
-                            st.success(f"{pw_role_label} 비밀번호가 변경되었습니다.")
+        # v1.10까지는 "관리자 비밀번호 1개 / 직원 비밀번호 1개"를 이 자리에서
+        # 바꾸는 구조였음(역할 단위). v1.11부터는 개인별 계정을 발급하므로,
+        # 이 섹션은 "사람 단위"로 등록/역할변경/비활성화/비밀번호 초기화를
+        # 하는 화면으로 바뀜.
+        #
+        # 삭제보다 '비활성'을 기본 수단으로 안내하는 이유: 과거 로그의
+        # '작성자' 컬럼에는 아이디 문자열만 남으므로, 계정을 지우면 그 아이디가
+        # 누구였는지 나중에 확인할 수 없게 됨(감사 추적이 끊김).
+        if engine.sheet_logger and engine.sheet_logger.users_enabled():
+            st.divider()
+            st.subheader("사용자 관리")
+            st.caption(
+                "개인별 아이디/비밀번호를 발급하고 역할을 관리합니다. "
+                "역할은 관리자(admin) · 직원(staff) · 고객(customer) 세 가지입니다."
+            )
 
+            _ROLE_OPTIONS = {
+                "관리자 (회계사)": "admin",
+                "직원": "staff",
+                "고객": "customer",
+            }
+            _ROLE_TO_LABEL = {v: k for k, v in _ROLE_OPTIONS.items()}
+
+            # --- 새 사용자 등록 ---
+            with st.expander("새 사용자 등록", expanded=False):
+                with st.form("create_user_form", clear_on_submit=True):
+                    nu_id = st.text_input("아이디 (영문/숫자, 공백 없이)")
+                    nu_name = st.text_input("이름")
+                    nu_role_label = st.selectbox("역할", list(_ROLE_OPTIONS.keys()), index=1)
+                    nu_pw = st.text_input("초기 비밀번호 (4자 이상)", type="password")
+                    nu_pw2 = st.text_input("초기 비밀번호 확인", type="password")
+                    if st.form_submit_button("등록", type="primary"):
+                        if nu_pw != nu_pw2:
+                            st.error("입력한 비밀번호가 서로 다릅니다.")
+                        else:
+                            ok, msg = engine.sheet_logger.create_user(
+                                user_id=nu_id,
+                                password=nu_pw,
+                                role=_ROLE_OPTIONS[nu_role_label],
+                                name=nu_name,
+                            )
+                            if ok:
+                                st.success(
+                                    msg + " 초기 비밀번호를 본인에게 직접 전달하고, "
+                                    "첫 로그인 후 '내 비밀번호 변경'에서 바꾸도록 안내해주세요."
+                                )
+                                st.rerun()
+                            else:
+                                st.error(msg)
+
+            # --- 등록된 사용자 목록 ---
+            _users = engine.sheet_logger.list_users()
+            if not _users:
+                st.info("등록된 사용자가 없습니다.")
+            else:
+                st.caption(f"등록된 사용자 {len(_users)}명")
+                for _row_no, _u in _users:
+                    _uid = str(_u.get("아이디", "")).strip()
+                    _urole = str(_u.get("역할", "")).strip()
+                    _uname = str(_u.get("이름", "")).strip()
+                    _uactive = str(_u.get("활성", "")).strip().upper() == "Y"
+                    _ulast = str(_u.get("최종로그인", "")).strip() or "기록 없음"
+                    _is_self = (_uid.lower() == str(user_id).strip().lower())
+
+                    _badge = (
+                        "<span style='background:#E1F5EE;color:#0F6E56;font-size:11px;"
+                        "padding:2px 8px;border-radius:10px;margin-right:8px;'>활성</span>"
+                        if _uactive else
+                        "<span style='background:#F0EFEC;color:#77746D;font-size:11px;"
+                        "padding:2px 8px;border-radius:10px;margin-right:8px;'>비활성</span>"
+                    )
+                    _label = (
+                        f"{_uid} · {_ROLE_TO_LABEL.get(_urole, _urole)}"
+                        f"{' · ' + _uname if _uname else ''}"
+                        f"{'  (나)' if _is_self else ''}"
+                    )
+                    with st.expander(_label, expanded=False):
+                        st.markdown(
+                            f"{_badge}<span style='color:#888780;font-size:12px;'>"
+                            f"최종 로그인: {_ulast}</span>",
+                            unsafe_allow_html=True,
+                        )
+
+                        _k = _uid.replace(" ", "_")
+
+                        # 비밀번호 초기화
+                        with st.form(f"reset_pw_{_k}", clear_on_submit=True):
+                            _new_pw = st.text_input(
+                                "비밀번호 초기화 (4자 이상)",
+                                type="password",
+                                key=f"reset_pw_input_{_k}",
+                                help="관리자가 임시 비밀번호를 지정합니다. 본인에게 전달한 뒤 "
+                                     "직접 변경하도록 안내해주세요.",
+                            )
+                            if st.form_submit_button("비밀번호 초기화"):
+                                ok, msg = engine.sheet_logger.set_user_password(_uid, _new_pw)
+                                (st.success if ok else st.error)(msg)
+
+                        # 역할 변경
+                        _cur_idx = list(_ROLE_OPTIONS.values()).index(_urole) if _urole in _ROLE_OPTIONS.values() else 1
+                        _new_role_label = st.selectbox(
+                            "역할 변경",
+                            list(_ROLE_OPTIONS.keys()),
+                            index=_cur_idx,
+                            key=f"role_sel_{_k}",
+                        )
+                        if st.button("역할 적용", key=f"role_btn_{_k}"):
+                            ok, msg = engine.sheet_logger.set_user_role(
+                                _uid, _ROLE_OPTIONS[_new_role_label]
+                            )
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+
+                        # 활성/비활성 토글
+                        # 본인 계정은 스스로 잠그지 못하게 막는다(로그인한 채로
+                        # 자기 계정을 비활성화하면, 다음 로그인부터 막혀버림).
+                        _c1, _c2 = st.columns(2)
+                        with _c1:
+                            if _uactive:
+                                if st.button(
+                                    "비활성화 (로그인 차단)",
+                                    key=f"deact_{_k}",
+                                    disabled=_is_self,
+                                    use_container_width=True,
+                                    help="본인 계정은 비활성화할 수 없습니다." if _is_self else
+                                         "퇴사자 처리 등에 사용하세요. 과거 기록은 그대로 남습니다.",
+                                ):
+                                    ok, msg = engine.sheet_logger.set_user_active(_uid, False)
+                                    if ok:
+                                        st.success(msg)
+                                        st.rerun()
+                                    else:
+                                        st.error(msg)
+                            else:
+                                if st.button("다시 활성화", key=f"act_{_k}", use_container_width=True):
+                                    ok, msg = engine.sheet_logger.set_user_active(_uid, True)
+                                    if ok:
+                                        st.success(msg)
+                                        st.rerun()
+                                    else:
+                                        st.error(msg)
+
+                        # 삭제 — 2단계 확인 (검증대기 삭제와 동일한 패턴)
+                        with _c2:
+                            _del_key = f"user_del_confirm_{_k}"
+                            if st.button(
+                                "계정 삭제",
+                                key=f"del_user_{_k}",
+                                disabled=_is_self,
+                                use_container_width=True,
+                                help="본인 계정은 삭제할 수 없습니다." if _is_self else
+                                     "되도록 삭제 대신 '비활성화'를 사용하세요.",
+                            ):
+                                st.session_state[_del_key] = True
+                        if st.session_state.get(f"user_del_confirm_{_k}"):
+                            st.warning(
+                                f"'{_uid}' 계정을 완전히 삭제할까요? 되돌릴 수 없습니다. "
+                                "과거 기록의 '작성자'에는 아이디만 남아 있어, 삭제하면 "
+                                "누구인지 확인할 수 없게 됩니다. 퇴사자라면 '비활성화'를 권장합니다."
+                            )
+                            _dc1, _dc2 = st.columns(2)
+                            with _dc1:
+                                if st.button("삭제 확정", key=f"del_yes_user_{_k}", use_container_width=True):
+                                    ok, msg = engine.sheet_logger.delete_user(_uid)
+                                    st.session_state[f"user_del_confirm_{_k}"] = False
+                                    if ok:
+                                        st.success(msg)
+                                        st.rerun()
+                                    else:
+                                        st.error(msg)
+                            with _dc2:
+                                if st.button("취소", key=f"del_no_user_{_k}", use_container_width=True):
+                                    st.session_state[f"user_del_confirm_{_k}"] = False
+                                    st.rerun()
         # ------------------------------------------------------------------
         # 검증대기 불러오기 (2026-06-27 추가)
         # ------------------------------------------------------------------
@@ -2730,6 +2944,33 @@ with tab_admin:
             with st.spinner("지식베이스를 다시 불러오는 중..."):
                 engine.load_knowledge_base(force_reload=True)
             st.success("지식베이스를 최신 상태로 다시 불러왔습니다.")
+
+    # ----------------------------------------------------------------------
+    # 내 비밀번호 변경 (v1.11 — 모든 역할 공통)
+    # ----------------------------------------------------------------------
+    # 관리자가 발급한 초기 비밀번호를 본인이 직접 바꾸는 자리. 관리자·직원·고객
+    # 누구나 접근 가능하며, 현재 비밀번호를 한 번 확인한 뒤에만 변경된다.
+    # (비상 복구 비밀번호로 들어온 경우에는 대응되는 계정 자체가 없으므로 숨김)
+    if (
+        engine.sheet_logger
+        and engine.sheet_logger.users_enabled()
+        and not st.session_state.get("_logged_in_via_master_reset")
+    ):
+        st.divider()
+        st.subheader("내 비밀번호 변경")
+        st.caption(f"현재 로그인: {user_name} ({user_id})")
+        with st.form("change_my_pw_form", clear_on_submit=True):
+            _cur_pw = st.text_input("현재 비밀번호", type="password")
+            _new_pw = st.text_input("새 비밀번호 (4자 이상)", type="password")
+            _new_pw2 = st.text_input("새 비밀번호 확인", type="password")
+            if st.form_submit_button("비밀번호 변경"):
+                if not engine.sheet_logger.verify_user(user_id, _cur_pw):
+                    st.error("현재 비밀번호가 일치하지 않습니다.")
+                elif _new_pw != _new_pw2:
+                    st.error("입력한 새 비밀번호가 서로 다릅니다.")
+                else:
+                    ok, msg = engine.sheet_logger.set_user_password(user_id, _new_pw)
+                    (st.success if ok else st.error)(msg)
 
     st.divider()
     st.subheader("저장 옵션")

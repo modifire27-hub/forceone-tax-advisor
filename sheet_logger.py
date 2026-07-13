@@ -33,7 +33,13 @@ from datetime import datetime
 class SheetLogger:
     """구글 스프레드시트 로깅 클라이언트. 설정 미비 시 비활성 상태로 안전하게 동작."""
 
-    HEADER = ["일시", "질문", "답변요약", "전체답변", "근거유형", "사용자구분", "확정여부"]
+    # "작성자" 컬럼 (2026-07-13, v1.11 개인별 계정 도입과 함께 추가):
+    # 기존 "사용자구분"은 역할(회계사/직원/고객)만 담고 있어 "누가" 질의했는지
+    # 알 수 없었음. 개인별 아이디 체계가 생기면서, 로그인한 사람의 아이디를
+    # 이 컬럼에 함께 남겨 감사 추적이 가능하도록 함. 기존 행은 이 값이 비어
+    # 있으며(마이그레이션 없이 그대로 둠), 빈 값은 "구 버전에서 기록된 행"을
+    # 뜻함.
+    HEADER = ["일시", "질문", "답변요약", "전체답변", "근거유형", "사용자구분", "확정여부", "작성자"]
 
     # 종합문서 탭(워크시트) 이름 및 헤더
     # - 개별 질의응답(HEADER, sheet1)과는 별도 탭에 저장하여, "개별 답변 로그"와
@@ -45,7 +51,10 @@ class SheetLogger:
     # 확정되면 update_summary()가 이 컬럼과 본문 내용을 함께 최종본으로
     # 덮어써서 원본(수정 전) 내용은 남기지 않음 — 지식베이스 확정 문서와
     # 원본 로그가 따로 보관되어 헷갈리는 것을 방지하기 위함.
-    SUMMARY_HEADER = ["일시", "포함된질의건수", "종합문서요약", "종합문서전체", "사용자구분", "확정여부"]
+    # "작성자" 컬럼 (2026-07-13, v1.11): 개별 로그(HEADER)와 동일한 취지.
+    # 고객(customer) 역할은 종합문서 탭에서 "본인이 만든 문서"만 볼 수 있어야
+    # 하므로, 이 컬럼이 그 필터의 기준이 됨(get_recent_summaries의 author 인자).
+    SUMMARY_HEADER = ["일시", "포함된질의건수", "종합문서요약", "종합문서전체", "사용자구분", "확정여부", "작성자"]
 
     # 지식베이스 탭(워크시트) 이름 및 헤더
     # 설계 의도 (2026-06-25 추가):
@@ -115,6 +124,31 @@ class SheetLogger:
     #   두지 않음. 그조차 별도 설정값이 필요해 번거로움을 다시 만들기 때문)
     ACCOUNT_SHEET_NAME = "계정설정"
     ACCOUNT_HEADER = ["역할", "비밀번호해시"]
+
+    # 사용자 탭(워크시트) 이름 및 헤더
+    # 설계 의도 (2026-07-13 추가 — v1.11, 개인별 계정 체계):
+    # - 위의 "계정설정" 탭은 역할(admin/staff) 단위로 비밀번호 해시 1개씩만
+    #   보관하는 구조였음. 즉 같은 역할의 사람은 전부 같은 비밀번호를 공유해서
+    #   "누가" 질의했는지 추적이 불가능했고(개발계획서 8.1절의 남은 과제),
+    #   퇴사자가 생겨도 그 사람만 차단할 방법이 없었음.
+    # - 해결: 개인별 계정을 이 탭에 한 행씩 보관함. 관리자(admin)가 화면에서
+    #   직접 등록/역할변경/비활성화/비밀번호 초기화를 할 수 있음.
+    # - 역할은 admin(회계사) / staff(직원) / customer(고객) 세 가지.
+    # - 비밀번호는 평문 저장 금지. 계정마다 고유한 솔트를 만들고
+    #   PBKDF2-HMAC-SHA256(반복 100,000회)으로 늘려서 해시만 저장함.
+    #   기존 PIN/계정설정이 쓰던 단순 sha256보다 강화한 이유: 이 저장소는
+    #   공개 GitHub 저장소가 아니라 구글시트지만, 사람 수만큼 해시가 쌓이고
+    #   개인별 계정은 유출 시 피해 범위가 넓어지므로 솔트 + 스트레칭을 적용함.
+    #   pbkdf2_hmac은 파이썬 표준 라이브러리(hashlib)라 추가 패키지가 필요 없음
+    #   (bcrypt/passlib를 넣으면 Streamlit Cloud 빌드 의존성이 하나 늘어남).
+    # - 활성 컬럼: "Y"만 로그인 허용. 퇴사자 등은 행을 지우는 대신 "N"으로
+    #   비활성화하는 것을 권장함 — 행을 지우면 과거 로그의 "작성자" 아이디가
+    #   누구인지 나중에 확인할 수 없게 되기 때문.
+    USER_SHEET_NAME = "사용자"
+    USER_HEADER = ["아이디", "비밀번호해시", "솔트", "역할", "이름", "활성", "생성일시", "최종로그인"]
+
+    # 허용되는 역할 값
+    VALID_ROLES = ("admin", "staff", "customer")
 
     def _setup_tab(self, name: str, fn) -> None:
         """
@@ -193,6 +227,7 @@ class SheetLogger:
         self.pending_sheet = None
         self.crosscheck_sheet = None
         self.account_sheet = None
+        self.user_sheet = None
         self.error_message = ""
         # 탭별 개별 오류 기록 (2026-07-09 추가) — 탭 하나가 실패해도 전체
         # 연동은 계속 살아있게 하되, 어떤 탭에서 무슨 문제가 있었는지는
@@ -262,6 +297,9 @@ class SheetLogger:
             self._setup_tab("account_sheet", lambda: self._init_worksheet(
                 spreadsheet, "account_sheet", self.ACCOUNT_SHEET_NAME, self.ACCOUNT_HEADER, rows=10
             ))
+            self._setup_tab("user_sheet", lambda: self._init_worksheet(
+                spreadsheet, "user_sheet", self.USER_SHEET_NAME, self.USER_HEADER, rows=200
+            ))
 
             # 핵심 연결(스프레드시트 접근, 시트1)만 되면 연동은 "활성"으로 봄 —
             # 개별 탭 하나가 실패해도 나머지 기능은 정상 동작해야 하므로.
@@ -275,7 +313,8 @@ class SheetLogger:
             self.error_message = f"[{type(e).__name__}] {e}"
             print(f"[경고] 구글 시트 로깅 초기화 실패: {self.error_message}")
 
-    def log(self, question: str, answer: str, evidence_type: str = "", user_type: str = "직원") -> str:
+    def log(self, question: str, answer: str, evidence_type: str = "", user_type: str = "직원",
+            user_id: str = "") -> str:
         """
         질의응답 1건을 시트에 한 행으로 추가.
 
@@ -293,7 +332,7 @@ class SheetLogger:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             summary = answer[:100].replace("\n", " ") + ("..." if len(answer) > 100 else "")
             self.sheet.append_row(
-                [timestamp, question, summary, answer, evidence_type, user_type, ""],
+                [timestamp, question, summary, answer, evidence_type, user_type, "", user_id or ""],
                 value_input_option="RAW",
             )
             return timestamp
@@ -301,9 +340,19 @@ class SheetLogger:
             print(f"[경고] 구글 시트 로깅 실패 (답변 생성에는 영향 없음): {e}")
             return None
 
-    def get_recent_logs(self, limit: int = 20) -> list:
+    def get_recent_logs(self, limit: int = 20, author: str = None) -> list:
         """
         최근 로그를 가져옴 (시트 내 검색/조회 UI에서 사용)
+
+        Parameters
+        ----------
+        limit : int
+            가져올 최대 건수 (최신순)
+        author : str, optional
+            지정하면 '작성자' 컬럼이 이 아이디와 일치하는 행만 대상으로 함.
+            (v1.11 추가 — 고객 역할이 본인 기록만 볼 수 있게 하기 위한 필터.
+            먼저 전체에서 걸러낸 뒤 최근 limit건을 자름 — limit으로 먼저
+            자르면 본인 기록이 오래된 경우 하나도 안 남을 수 있기 때문.)
 
         Returns
         -------
@@ -315,6 +364,8 @@ class SheetLogger:
 
         try:
             all_rows = self.sheet.get_all_records()
+            if author:
+                all_rows = [r for r in all_rows if str(r.get("작성자", "")).strip() == author.strip()]
             return all_rows[-limit:][::-1]  # 최신순
         except Exception as e:
             print(f"[경고] 구글 시트 조회 실패: {e}")
@@ -394,7 +445,8 @@ class SheetLogger:
     # ------------------------------------------------------------------
     # 종합문서 전용 기록/조회 (개별 질의응답과는 별도 탭에 저장)
     # ------------------------------------------------------------------
-    def log_summary(self, turns_count: int, summary_text: str, user_type: str = "직원") -> str:
+    def log_summary(self, turns_count: int, summary_text: str, user_type: str = "직원",
+                    user_id: str = "") -> str:
         """
         종합 문서 1건을 '종합문서' 탭에 한 행으로 추가.
 
@@ -425,7 +477,7 @@ class SheetLogger:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             summary_preview = summary_text[:100].replace("\n", " ") + ("..." if len(summary_text) > 100 else "")
             self.summary_sheet.append_row(
-                [timestamp, turns_count, summary_preview, summary_text, user_type, ""],
+                [timestamp, turns_count, summary_preview, summary_text, user_type, "", user_id or ""],
                 value_input_option="RAW",
             )
             return timestamp
@@ -433,9 +485,19 @@ class SheetLogger:
             print(f"[경고] 종합문서 시트 로깅 실패 (저장 자체에는 영향 없음): {e}")
             return None
 
-    def get_recent_summaries(self, limit: int = 20) -> list:
+    def get_recent_summaries(self, limit: int = 20, author: str = None) -> list:
         """
         '종합문서' 탭에서 최근 기록을 가져옴 (조회 UI에서 사용)
+
+        Parameters
+        ----------
+        limit : int
+            가져올 최대 건수 (최신순)
+        author : str, optional
+            지정하면 '작성자' 컬럼이 이 아이디와 일치하는 행만 반환함.
+            (v1.11 — 고객 역할은 본인이 만든 종합문서만 볼 수 있음. 개인별
+            계정 도입 이전에 쌓인 행은 '작성자'가 비어 있으므로, 고객에게는
+            보이지 않음 — 의도된 동작이며 오히려 안전함.)
 
         Returns
         -------
@@ -447,6 +509,8 @@ class SheetLogger:
 
         try:
             all_rows = self.summary_sheet.get_all_records()
+            if author:
+                all_rows = [r for r in all_rows if str(r.get("작성자", "")).strip() == author.strip()]
             return all_rows[-limit:][::-1]  # 최신순
         except Exception as e:
             print(f"[경고] 종합문서 시트 조회 실패: {e}")
@@ -1075,6 +1139,295 @@ class SheetLogger:
         except Exception as e:
             print(f"[경고] 계정설정 시트 저장 실패: {e}")
             return False
+
+    # ------------------------------------------------------------------
+    # 개인별 사용자 계정 (구글시트 '사용자' 탭) — v1.11 (2026-07-13)
+    # ------------------------------------------------------------------
+    # 위의 "계정설정"(역할별 공용 비밀번호)을 대체하는 구조. 개인마다
+    # 아이디/비밀번호를 발급하고, 관리자가 화면에서 직접 관리함.
+    #
+    # 컬럼 위치(1-based, USER_HEADER 순서와 반드시 일치해야 함):
+    #   1 아이디 · 2 비밀번호해시 · 3 솔트 · 4 역할 · 5 이름 ·
+    #   6 활성 · 7 생성일시 · 8 최종로그인
+    # 아래 update_cell 호출들이 이 번호에 의존하므로, USER_HEADER 순서를
+    # 바꿀 때는 반드시 이 메서드들도 함께 고쳐야 함.
+    # ------------------------------------------------------------------
+    COL_USER_ID = 1
+    COL_USER_HASH = 2
+    COL_USER_SALT = 3
+    COL_USER_ROLE = 4
+    COL_USER_NAME = 5
+    COL_USER_ACTIVE = 6
+    COL_USER_CREATED = 7
+    COL_USER_LASTLOGIN = 8
+
+    @staticmethod
+    def _make_salt() -> str:
+        """계정마다 고유한 무작위 솔트(16바이트 → 32자 hex)를 생성."""
+        import binascii
+        return binascii.hexlify(os.urandom(16)).decode("ascii")
+
+    @staticmethod
+    def _hash_password(password: str, salt: str) -> str:
+        """
+        PBKDF2-HMAC-SHA256 (반복 100,000회)으로 비밀번호를 해시함.
+        hashlib은 파이썬 표준 라이브러리라 requirements.txt 변경이 필요 없음.
+        """
+        return hashlib.pbkdf2_hmac(
+            "sha256",
+            (password or "").strip().encode("utf-8"),
+            (salt or "").encode("utf-8"),
+            100_000,
+        ).hex()
+
+    def users_enabled(self) -> bool:
+        """'사용자' 탭이 실제로 사용 가능한 상태인지."""
+        return bool(self.enabled and self.user_sheet is not None)
+
+    def list_users(self) -> list:
+        """
+        '사용자' 탭의 모든 계정을 (시트행번호, 계정dict) 목록으로 반환.
+        비밀번호해시/솔트는 그대로 들어있으므로 화면에 절대 표시하지 말 것.
+
+        Returns
+        -------
+        list[tuple[int, dict]]
+            [(row_number, record), ...]  실패 시 빈 리스트
+        """
+        if not self.users_enabled():
+            return []
+        try:
+            records = self.user_sheet.get_all_records()
+            return [(idx + 2, rec) for idx, rec in enumerate(records)]
+        except Exception as e:
+            print(f"[경고] 사용자 시트 조회 실패: {e}")
+            return []
+
+    def has_any_user(self) -> bool:
+        """
+        계정이 하나라도 등록되어 있는지. False면 UI가 "최초 관리자 계정 만들기"
+        화면을 보여줘야 함(부트스트랩).
+        """
+        return len(self.list_users()) > 0
+
+    def count_active_admins(self) -> int:
+        """활성 상태인 admin 계정 수. 마지막 관리자를 실수로 잠그는 것을 막는 데 사용."""
+        return sum(
+            1
+            for _, u in self.list_users()
+            if str(u.get("역할", "")).strip() == "admin"
+            and str(u.get("활성", "")).strip().upper() == "Y"
+        )
+
+    def _find_user_row(self, user_id: str):
+        """아이디로 (시트행번호, 계정dict)를 찾음. 없으면 (None, None)."""
+        needle = (user_id or "").strip().lower()
+        for row_no, rec in self.list_users():
+            if str(rec.get("아이디", "")).strip().lower() == needle:
+                return row_no, rec
+        return None, None
+
+    def verify_user(self, user_id: str, password: str):
+        """
+        아이디/비밀번호를 검증함.
+
+        Returns
+        -------
+        dict | None
+            성공 시 {"user_id", "role", "name"} — 실패(아이디 없음/비밀번호
+            불일치/비활성 계정)하면 None. 실패 원인을 구분해서 알려주지 않는
+            이유는, 그 자체가 "이 아이디는 존재한다"는 정보를 흘리기 때문임.
+        """
+        if not self.users_enabled():
+            return None
+
+        _row_no, rec = self._find_user_row(user_id)
+        if rec is None:
+            return None
+        if str(rec.get("활성", "")).strip().upper() != "Y":
+            return None
+
+        salt = str(rec.get("솔트", "")).strip()
+        stored = str(rec.get("비밀번호해시", "")).strip()
+        if not salt or not stored:
+            return None
+        if self._hash_password(password, salt) != stored:
+            return None
+
+        return {
+            "user_id": str(rec.get("아이디", "")).strip(),
+            "role": str(rec.get("역할", "staff")).strip() or "staff",
+            "name": str(rec.get("이름", "")).strip(),
+        }
+
+    def touch_last_login(self, user_id: str) -> bool:
+        """로그인 성공 시 '최종로그인' 컬럼을 현재 시각으로 갱신(실패해도 무시)."""
+        if not self.users_enabled():
+            return False
+        try:
+            row_no, rec = self._find_user_row(user_id)
+            if row_no is None:
+                return False
+            self.user_sheet.update_cell(
+                row_no, self.COL_USER_LASTLOGIN, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            return True
+        except Exception as e:
+            print(f"[경고] 최종로그인 갱신 실패(로그인 자체에는 영향 없음): {e}")
+            return False
+
+    def create_user(self, user_id: str, password: str, role: str, name: str = "") -> tuple:
+        """
+        새 계정 1건을 '사용자' 탭에 추가.
+
+        Returns
+        -------
+        (bool, str)
+            (성공여부, 사용자에게 보여줄 메시지)
+        """
+        if not self.users_enabled():
+            return False, "구글시트 '사용자' 탭을 사용할 수 없습니다."
+
+        uid = (user_id or "").strip()
+        role = (role or "").strip()
+
+        if not uid:
+            return False, "아이디를 입력해주세요."
+        if " " in uid:
+            return False, "아이디에는 공백을 넣을 수 없습니다."
+        if role not in self.VALID_ROLES:
+            return False, f"역할은 {', '.join(self.VALID_ROLES)} 중 하나여야 합니다."
+        if len((password or "").strip()) < 4:
+            return False, "비밀번호는 4자 이상이어야 합니다."
+
+        row_no, _rec = self._find_user_row(uid)
+        if row_no is not None:
+            return False, f"이미 존재하는 아이디입니다: {uid}"
+
+        try:
+            salt = self._make_salt()
+            self.user_sheet.append_row(
+                [
+                    uid,
+                    self._hash_password(password, salt),
+                    salt,
+                    role,
+                    (name or "").strip(),
+                    "Y",
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "",
+                ],
+                value_input_option="RAW",
+            )
+            return True, f"'{uid}' 계정을 등록했습니다."
+        except Exception as e:
+            print(f"[경고] 사용자 등록 실패: {e}")
+            return False, f"등록 중 오류가 발생했습니다: {e}"
+
+    def set_user_password(self, user_id: str, new_password: str) -> tuple:
+        """
+        계정의 비밀번호를 새로 설정(초기화 포함). 솔트도 함께 새로 만들어
+        같은 비밀번호를 다시 써도 해시가 달라지도록 함.
+        """
+        if not self.users_enabled():
+            return False, "구글시트 '사용자' 탭을 사용할 수 없습니다."
+        if len((new_password or "").strip()) < 4:
+            return False, "비밀번호는 4자 이상이어야 합니다."
+
+        row_no, _rec = self._find_user_row(user_id)
+        if row_no is None:
+            return False, f"계정을 찾을 수 없습니다: {user_id}"
+
+        try:
+            salt = self._make_salt()
+            new_hash = self._hash_password(new_password, salt)
+            # 해시(B)와 솔트(C)는 반드시 함께 바뀌어야 하므로 한 번의
+            # batch_update로 원자적으로 처리함. 하나만 바뀌면 그 계정은
+            # 영영 로그인이 안 되는 상태가 됨.
+            self.user_sheet.batch_update(
+                [
+                    {"range": f"B{row_no}", "values": [[new_hash]]},
+                    {"range": f"C{row_no}", "values": [[salt]]},
+                ],
+                value_input_option="RAW",
+            )
+            return True, "비밀번호를 변경했습니다."
+        except Exception as e:
+            print(f"[경고] 비밀번호 변경 실패: {e}")
+            return False, f"변경 중 오류가 발생했습니다: {e}"
+
+    def set_user_role(self, user_id: str, new_role: str) -> tuple:
+        """계정의 역할을 변경."""
+        if not self.users_enabled():
+            return False, "구글시트 '사용자' 탭을 사용할 수 없습니다."
+        if new_role not in self.VALID_ROLES:
+            return False, f"역할은 {', '.join(self.VALID_ROLES)} 중 하나여야 합니다."
+
+        row_no, rec = self._find_user_row(user_id)
+        if row_no is None:
+            return False, f"계정을 찾을 수 없습니다: {user_id}"
+
+        # 마지막 남은 활성 관리자를 강등하면 아무도 관리자 기능에 접근할 수
+        # 없게 됨(비상 복구 비밀번호 외에는 길이 없음) — 미리 막는다.
+        was_admin = str(rec.get("역할", "")).strip() == "admin"
+        is_active = str(rec.get("활성", "")).strip().upper() == "Y"
+        if was_admin and is_active and new_role != "admin" and self.count_active_admins() <= 1:
+            return False, "마지막 남은 관리자 계정의 역할은 변경할 수 없습니다. 다른 관리자를 먼저 등록해주세요."
+
+        try:
+            self.user_sheet.update_cell(row_no, self.COL_USER_ROLE, new_role)
+            return True, f"'{user_id}'의 역할을 {new_role}(으)로 변경했습니다."
+        except Exception as e:
+            print(f"[경고] 역할 변경 실패: {e}")
+            return False, f"변경 중 오류가 발생했습니다: {e}"
+
+    def set_user_active(self, user_id: str, active: bool) -> tuple:
+        """계정을 활성/비활성 처리. 비활성 계정은 로그인할 수 없음."""
+        if not self.users_enabled():
+            return False, "구글시트 '사용자' 탭을 사용할 수 없습니다."
+
+        row_no, rec = self._find_user_row(user_id)
+        if row_no is None:
+            return False, f"계정을 찾을 수 없습니다: {user_id}"
+
+        if not active:
+            was_admin = str(rec.get("역할", "")).strip() == "admin"
+            if was_admin and self.count_active_admins() <= 1:
+                return False, "마지막 남은 관리자 계정은 비활성화할 수 없습니다."
+
+        try:
+            self.user_sheet.update_cell(row_no, self.COL_USER_ACTIVE, "Y" if active else "N")
+            return True, f"'{user_id}' 계정을 {'활성' if active else '비활성'} 처리했습니다."
+        except Exception as e:
+            print(f"[경고] 활성 상태 변경 실패: {e}")
+            return False, f"변경 중 오류가 발생했습니다: {e}"
+
+    def delete_user(self, user_id: str) -> tuple:
+        """
+        계정 행을 완전히 삭제.
+
+        주의: 과거 로그의 '작성자' 컬럼에는 아이디 문자열만 남아 있으므로,
+        계정을 지우면 그 아이디가 누구였는지 나중에 확인할 수 없게 됨.
+        퇴사자 처리 등은 삭제가 아니라 set_user_active(False)를 권장함.
+        """
+        if not self.users_enabled():
+            return False, "구글시트 '사용자' 탭을 사용할 수 없습니다."
+
+        row_no, rec = self._find_user_row(user_id)
+        if row_no is None:
+            return False, f"계정을 찾을 수 없습니다: {user_id}"
+
+        is_admin_row = str(rec.get("역할", "")).strip() == "admin"
+        is_active = str(rec.get("활성", "")).strip().upper() == "Y"
+        if is_admin_row and is_active and self.count_active_admins() <= 1:
+            return False, "마지막 남은 관리자 계정은 삭제할 수 없습니다."
+
+        try:
+            self.user_sheet.delete_rows(row_no)
+            return True, f"'{user_id}' 계정을 삭제했습니다."
+        except Exception as e:
+            print(f"[경고] 사용자 삭제 실패: {e}")
+            return False, f"삭제 중 오류가 발생했습니다: {e}"
 
 
 # ----------------------------------------------------------------------

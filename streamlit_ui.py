@@ -251,6 +251,24 @@ st.markdown(
         box-shadow: 0 0 0 2px var(--pf-gold) !important;
         border-color: var(--pf-gold) !important;
     }
+    /* 입력칸 라벨 (2026-07-13 추가 — v1.11 개인별 로그인)
+       기존 로그인 폼은 입력칸이 '비밀번호' 하나뿐이라 label_visibility="collapsed"로
+       라벨을 아예 숨겼고, 그래서 이 네이비 패널 안의 라벨 글자색 규칙이 없었음.
+       v1.11에서 아이디/이름 등 라벨이 필요한 입력칸이 늘어나자, 라벨이 기본
+       글자색(진한 남색)으로 찍혀 남색 배경에 묻혀 보이지 않는 문제가 발생함
+       (드래그하면 반전되어 그제서야 보이는 증상). 패널 설명문(.pf-login-desc)과
+       같은 밝은 색으로 맞춤. */
+    .st-key-pf_login_wrap div[data-testid="stForm"] label,
+    .st-key-pf_login_wrap div[data-testid="stForm"] label p,
+    .st-key-pf_login_wrap div[data-testid="stForm"] div[data-testid="stWidgetLabel"] p {
+        color: #d7e3f0 !important;
+        font-weight: 500 !important;
+    }
+    /* 폼 안의 보조 설명(캡션)도 같은 계열의 밝은 색으로 */
+    .st-key-pf_login_wrap div[data-testid="stForm"] div[data-testid="stCaptionContainer"] p,
+    .st-key-pf_login_wrap div[data-testid="stForm"] small {
+        color: #a9bdd2 !important;
+    }
     .st-key-pf_login_wrap button[kind="primaryFormSubmit"] {
         background-color: var(--pf-gold) !important;
         border-color: var(--pf-gold) !important;
@@ -538,8 +556,15 @@ def authenticate():
                 "비상 복구 비밀번호로만 로그인할 수 있습니다.",
             )
             if login_logger.error_message and login_logger.error_message != "__NOT_CONFIGURED__":
-                st.caption(f"원인: {login_logger.error_message}")
+                _err_detail = login_logger.error_message
+            else:
+                _err_detail = ""
             with st.form("master_login_form"):
+                # 실패 원인은 폼 '안'에 표시함. 패널(위)과 폼(아래)은 CSS로
+                # 위아래가 이어진 하나의 박스처럼 보이게 되어 있어서, 그 사이에
+                # 캡션을 끼워 넣으면 박스가 두 동강 난 것처럼 보임.
+                if _err_detail:
+                    st.caption(f"원인: {_err_detail}")
                 pw_input = st.text_input("비상 복구 비밀번호", type="password")
                 submitted = st.form_submit_button("입장", type="primary")
 
